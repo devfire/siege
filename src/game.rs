@@ -17,6 +17,8 @@ const CANNON_DMG: f32 = 60.0;
 const RELOAD: f32 = 3.5;
 const CHARGE_RATE: f32 = (1.0 - 0.18) / 1.1; // 0.18 → 1.0 in 1.1 s
 const SHAKE_TAU: f32 = 0.35;
+const WIND_SLOW_W: f32 = 0.03; // wind regime swing, rad/s (~3.5 min period)
+const WIND_FAST_W: f32 = 0.07; // gust wobble, rad/s (~90 s period)
 pub(crate) const END_SLOWMO: f32 = 0.35;
 pub(crate) const END_HOLD: f32 = 2.0;
 
@@ -29,15 +31,20 @@ pub enum Phase {
     Defeat,
 }
 
+/// Wind speed (m/s, +x): a slow ±12 m/s regime swing that returns through
+/// zero every ~3.5 min, plus a fast ±2 m/s gust wobble (~90 s). A frozen
+/// per-round base left ~83% of rounds one-signed forever; the swing
+/// guarantees the wind changes direction. Peak magnitude stays ±14 m/s.
 pub struct Wind {
-    pub base: f32,
-    pub phase: f32,
+    pub slow_phase: f32,
+    pub fast_phase: f32,
 }
 
 impl Wind {
     #[must_use]
     pub fn current(&self, t: f32) -> f32 {
-        self.base + 2.0 * (0.07 * t + self.phase).sin()
+        12.0 * (WIND_SLOW_W * t + self.slow_phase).sin()
+            + 2.0 * (WIND_FAST_W * t + self.fast_phase).sin()
     }
 }
 
@@ -82,9 +89,10 @@ pub struct GameState {
 impl GameState {
     #[must_use]
     pub fn new(mut rng: Rng) -> Self {
+        // Two phase draws (same count as before, seed stream preserved).
         let wind = Wind {
-            base: rng.range(-12.0, 12.0),
-            phase: rng.range(0.0, std::f32::consts::TAU),
+            slow_phase: rng.range(0.0, std::f32::consts::TAU),
+            fast_phase: rng.range(0.0, std::f32::consts::TAU),
         };
         Self {
             phase: Phase::Menu,
