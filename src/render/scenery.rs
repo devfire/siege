@@ -307,5 +307,5 @@ fn draw_ground_dressing(state: &GameState, to_px: &dyn Fn(V2) -> Vec2, sc: f32) 
 
 /// Shared wind lean for grass (unit-ish, small).
 pub(super) fn wind_lean(state: &GameState) -> f32 {
-    state.wind.current(state.t) * 0.03
+    state.wind.current() * 0.03
 }

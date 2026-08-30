@@ -103,7 +103,7 @@ pub fn draw(state: &GameState, font: Option<&macroquad::text::Font>) {
     // parallax layers shake less.
     let shk = state.shake * s * 0.45;
     let shake = vec2((state.t * 61.7).sin() * shk, (state.t * 53.3).cos() * shk);
-    let wind = state.wind.current(state.t);
+    let wind = state.wind.current();
     draw_rectangle(ox, oy, WORLD_W * s, WORLD_H * s, SKY_TOP);
     draw_sky(shake);
     draw_sun(shake * 0.1);
@@ -308,7 +308,7 @@ fn draw_aim(state: &GameState, shake: Vec2) {
     let start = pivot + dir * physics::BARREL_LEN;
     let charge = state.player.charging.unwrap_or(state.player.power);
     let v0 = (charge * physics::MUZZLE_V_MAX).max(1.0);
-    let wind = state.wind.current(state.t);
+    let wind = state.wind.current();
     // Integrate the real ballistic model (drag + current wind) for the
     // first 18 m — the guide must match the flight, not a vacuum parabola.
     let t_end = 18.0 / v0;

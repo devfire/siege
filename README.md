@@ -46,9 +46,15 @@ The simulation runs on a deterministic, macroquad-independent physics foundation
     where $\vec{v}_{\text{rel}} = \vec{v} - (v_{\text{wind}}, 0)$, $g = 9.81\text{ m/s}^2$, and $K_{\text{drag}} = 0.0040\text{ m}^{-1}$.
   - Main simulation substeps at 240 Hz (`DT = 1/240 s`) using semi-implicit Euler integration.
   - Forward trajectory prediction uses `SIM_DT = 1/120 s`.
-- **Wind Dynamics:** Continuous multi-harmonic wave:
-  $$v_{\text{wind}}(t) = 12.0 \sin(0.03 t + \phi_{\text{slow}}) + 2.0 \sin(0.07 t + \phi_{\text{fast}})$$
-  yielding base swings within $[-12, +12]\text{ m/s}$ with high-frequency turbulence up to $[-14, +14]\text{ m/s}$.
+- **Wind Dynamics:** Two stochastic Ornstein–Uhlenbeck layers, integrated at the
+  240 Hz substep so the live value drifts second to second (a ball in flight meets
+  changing gusts):
+  - **Regime base:** drawn uniform on $[-12, +12]\text{ m/s}$ at round start (either
+    sign equally likely), then mean-reverting toward zero with
+    $\theta = 0.05\text{ s}^{-1}$ and noise $2.0\text{ m/s}\sqrt{\text{s}}$ — it wanders across zero within a round.
+  - **Gust layer:** mean-reverting toward the base with $\theta = 0.30\text{ s}^{-1}$ and
+    noise $2.2\text{ m/s}\sqrt{\text{s}}$ (~3 s memory, ~±3 m/s spread).
+  - Live speed clamped to $[-14, +14]\text{ m/s}$.
 
 ---
 

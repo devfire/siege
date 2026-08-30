@@ -21,8 +21,23 @@ const CRATER_CAP: usize = 24;
 const MARKER_CAP: usize = 6;
 const RANGE_CAP: usize = 3;
 const SHAKE_TAU: f32 = 0.35;
-const WIND_SLOW_W: f32 = 0.03; // wind regime swing, rad/s (~3.5 min period)
-const WIND_FAST_W: f32 = 0.07; // gust wobble, rad/s (~90 s period)
+/// Starting regime is uniform on ±this value (m/s).
+const WIND_BASE_SPAN: f32 = 12.0;
+/// Regime mean reversion (1/s): ~20 s memory, so the base wanders across
+/// zero within a round but aim knowledge survives between shots.
+const WIND_REGIME_THETA: f32 = 0.05;
+/// Regime noise (m/s per √s); with [`WIND_REGIME_THETA`] the stationary
+/// spread is ~6 m/s.
+const WIND_REGIME_KICK: f32 = 2.0;
+/// Gust mean reversion (1/s): ~3 s memory, so a ball in flight meets a
+/// different gust than the one its shot was aimed under.
+const WIND_GUST_THETA: f32 = 0.30;
+/// Gust noise (m/s per √s); with [`WIND_GUST_THETA`] the gust spread
+/// around the base is ~3 m/s.
+const WIND_GUST_KICK: f32 = 2.2;
+/// Hard envelope (m/s) clamping the live speed; the AI wind bracket
+/// ([−16, 16]) and the reach probe tune against ±14.
+const WIND_MAX: f32 = 14.0;
 pub(crate) const END_SLOWMO: f32 = 0.35;
 pub(crate) const END_HOLD: f32 = 2.0;
 
@@ -35,20 +50,43 @@ pub enum Phase {
     Defeat,
 }
 
-/// Wind speed (m/s, +x): a slow ±12 m/s regime swing that returns through
-/// zero every ~3.5 min, plus a fast ±2 m/s gust wobble (~90 s). A frozen
-/// per-round base left ~83% of rounds one-signed forever; the swing
-/// guarantees the wind changes direction. Peak magnitude stays ±14 m/s.
+/// Wind speed (m/s, +x), stochastic instead of a sine. Each round draws a
+/// fresh base uniform on ±12 m/s — either sign equally likely, so no side
+/// opens with a permanent headwind — then the base random-walks as a slow
+/// Ornstein–Uhlenbeck regime and a fast gust layer wobbles ~±3 m/s around
+/// it. The wind is never steady: it drifts second to second, and a ball in
+/// flight is pushed by a different gust than the shot was aimed under.
+/// Peak magnitude stays ±14 m/s.
 pub struct Wind {
-    pub slow_phase: f32,
-    pub fast_phase: f32,
+    /// Slow regime the gusts ride on.
+    base: f32,
+    /// Live speed applied to balls, particles, clouds, and the HUD gauge.
+    speed: f32,
 }
 
 impl Wind {
+    /// Round start: uniform base across the full span; the live speed
+    /// begins coherent with it.
     #[must_use]
-    pub fn current(&self, t: f32) -> f32 {
-        12.0 * (WIND_SLOW_W * t + self.slow_phase).sin()
-            + 2.0 * (WIND_FAST_W * t + self.fast_phase).sin()
+    pub fn new(rng: &mut Rng) -> Self {
+        let base = rng.range(-WIND_BASE_SPAN, WIND_BASE_SPAN);
+        Self { base, speed: base }
+    }
+
+    /// Advance both layers by one physics substep (Euler–Maruyama OU).
+    pub fn step(&mut self, dt: f32, rng: &mut Rng) {
+        let noise = dt.sqrt();
+        self.base -= WIND_REGIME_THETA * self.base * dt;
+        self.base += WIND_REGIME_KICK * noise * rng.gauss();
+        self.speed += WIND_GUST_THETA * (self.base - self.speed) * dt;
+        self.speed += WIND_GUST_KICK * noise * rng.gauss();
+        self.speed = self.speed.clamp(-WIND_MAX, WIND_MAX);
+    }
+
+    /// Live wind applied to balls, particles, clouds, and the HUD gauge.
+    #[must_use]
+    pub fn current(&self) -> f32 {
+        self.speed
     }
 }
 
@@ -93,11 +131,8 @@ pub struct GameState {
 impl GameState {
     #[must_use]
     pub fn new(mut rng: Rng) -> Self {
-        // Two phase draws (same count as before, seed stream preserved).
-        let wind = Wind {
-            slow_phase: rng.range(0.0, std::f32::consts::TAU),
-            fast_phase: rng.range(0.0, std::f32::consts::TAU),
-        };
+        // Round start: fresh uniform base; the live speed begins coherent.
+        let wind = Wind::new(&mut rng);
         Self {
             phase: Phase::Menu,
             rng,
@@ -154,7 +189,7 @@ impl GameState {
             for ball in &mut self.balls {
                 ball.push_trail(ball.pos);
             }
-            let wind = self.wind.current(self.t);
+            let wind = self.wind.current();
             self.particles.update(dt, wind);
             self.particles.spawn_leaves(wind, &mut self.rng, dt);
             self.shake = (self.shake * (-dt / SHAKE_TAU).exp()).max(0.0);
@@ -267,7 +302,7 @@ impl GameState {
     }
 
     fn tick_ai(&mut self, dt: f32) {
-        let wind = self.wind.current(self.t);
+        let wind = self.wind.current();
         let target_x = world::player_pivot().x;
         if let Some(shot) = self
             .ai
@@ -298,7 +333,9 @@ impl GameState {
     }
 
     fn substep(&mut self) {
-        let wind = self.wind.current(self.t);
+        // Wind evolves every substep, so a ball in flight meets changing gusts.
+        self.wind.step(DT, &mut self.rng);
+        let wind = self.wind.current();
         let keep_alive = self.keep_alive();
         let mut hits: Vec<(V2, Side, bool)> = Vec::new(); // (impact, side, ground contact)
         let mut despawn: Vec<usize> = Vec::new();

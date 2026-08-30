@@ -98,7 +98,7 @@ pub(super) fn draw_ui(state: &GameState, font: Option<&macroquad::text::Font>) {
         draw_rectangle(w - 24.0 - 170.0, 48.0, 168.0 * kf, 6.0, hp_color(kf));
     }
     // Wind banner, top-center.
-    let wind = state.wind.current(state.t);
+    let wind = state.wind.current();
     let label = format!("WIND {wind:+.1} m/s");
     txt_centered(&label, w * 0.5, 40.0, 26, PARCHMENT, font);
     let arrow_len = (wind.abs() * 4.0).min(70.0);
