@@ -1,0 +1,18 @@
+[package]
+name = "siege"
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.85"
+
+[dependencies]
+macroquad = "0.4.16"
+
+[lints.rust]
+unsafe_code = "warn"
+
+[lints.clippy]
+all = "warn"
+pedantic = "warn"
+
+[profile.dev]
+opt-level = 2
