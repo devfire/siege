@@ -103,11 +103,10 @@ pub fn draw(state: &GameState, font: Option<&macroquad::text::Font>) {
     // parallax layers shake less.
     let shk = state.shake * s * 0.45;
     let shake = vec2((state.t * 61.7).sin() * shk, (state.t * 53.3).cos() * shk);
-    let wind = state.wind.current();
     draw_rectangle(ox, oy, WORLD_W * s, WORLD_H * s, SKY_TOP);
     draw_sky(shake);
     draw_sun(shake * 0.1);
-    draw_clouds(state, wind, shake);
+    draw_clouds(state, shake);
     draw_mountains(shake);
     draw_ground(state, shake);
     draw_castle(state, shake);

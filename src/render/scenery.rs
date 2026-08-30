@@ -64,7 +64,7 @@ pub(super) fn draw_sun(shake: Vec2) {
     draw_circle(c.x, c.y, 4.0 * s, SUN_C);
 }
 
-pub(super) fn draw_clouds(state: &GameState, wind: f32, shake: Vec2) {
+pub(super) fn draw_clouds(state: &GameState, shake: Vec2) {
     let s = scale();
     for layer in 0..2u32 {
         let par = if layer == 0 { 0.1 } else { 0.18 };
@@ -77,7 +77,9 @@ pub(super) fn draw_clouds(state: &GameState, wind: f32, shake: Vec2) {
             let base_x = h1 * 260.0 - 30.0;
             let cy = 60.0 + h2 * 34.0 - (layer as f32) * 10.0;
             let size = 3.5 + h1 * 4.5 + (layer as f32) * 1.8;
-            let drift = state.t * (0.9 + 0.5 * h2) + wind * state.t * 0.22;
+            // Integrated wind travel, never `wind * t`: that product
+            // teleports clouds by Δwind × t on every wind change.
+            let drift = state.t * (0.9 + 0.5 * h2) + state.wind.travel() * 0.22;
             let cx = ((base_x + drift + 40.0) % 280.0 + 280.0) % 280.0 - 40.0;
             let col = Color::new(0.98, 0.9, 0.82, alpha);
             let p = w2s(V2 { x: cx, y: cy }) + off;

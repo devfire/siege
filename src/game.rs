@@ -35,6 +35,11 @@ const WIND_GUST_THETA: f32 = 0.30;
 /// Gust noise (m/s per √s); with [`WIND_GUST_THETA`] the gust spread
 /// around the base is ~3 m/s.
 const WIND_GUST_KICK: f32 = 2.2;
+
+/// Low-pass time constant (s) easing the live speed toward regime + gust.
+/// Bounds how fast the wind any consumer sees can change; scenery and the
+/// gauge read a glide, not a twitch.
+const WIND_SMOOTH_TAU: f32 = 0.6;
 /// Hard envelope (m/s) clamping the live speed; the AI wind bracket
 /// ([−16, 16]) and the reach probe tune against ±14.
 const WIND_MAX: f32 = 14.0;
@@ -53,15 +58,22 @@ pub enum Phase {
 /// Wind speed (m/s, +x), stochastic instead of a sine. Each round draws a
 /// fresh base uniform on ±12 m/s — either sign equally likely, so no side
 /// opens with a permanent headwind — then the base random-walks as a slow
-/// Ornstein–Uhlenbeck regime and a fast gust layer wobbles ~±3 m/s around
-/// it. The wind is never steady: it drifts second to second, and a ball in
-/// flight is pushed by a different gust than the shot was aimed under.
-/// Peak magnitude stays ±14 m/s.
+/// Ornstein–Uhlenbeck regime and a fast band-limited gust OU wobbles ~±3
+/// m/s around it. The live speed low-passes toward `base + gust`, so the
+/// wind evolves gradually and smoothly instead of twitching with
+/// per-substep noise. The wind is never steady: it drifts second to
+/// second, and a ball in flight is pushed by a different gust than the
+/// shot was aimed under. Peak magnitude stays ±14 m/s.
 pub struct Wind {
     /// Slow regime the gusts ride on.
     base: f32,
+    /// Fast OU wobble around the regime; band-limited, so it glides.
+    gust: f32,
     /// Live speed applied to balls, particles, clouds, and the HUD gauge.
     speed: f32,
+    /// Time integral of [`Wind::speed`] (m): how far the air has drifted.
+    /// Scenery rides this so wind changes cannot teleport it.
+    travel: f32,
 }
 
 impl Wind {
@@ -70,23 +82,45 @@ impl Wind {
     #[must_use]
     pub fn new(rng: &mut Rng) -> Self {
         let base = rng.range(-WIND_BASE_SPAN, WIND_BASE_SPAN);
-        Self { base, speed: base }
+        Self {
+            base,
+            gust: 0.0,
+            speed: base,
+            travel: 0.0,
+        }
     }
 
-    /// Advance both layers by one physics substep (Euler–Maruyama OU).
+    /// Advance one physics substep. The regime and the gust layer are both
+    /// Ornstein–Uhlenbeck walks, but the live speed only eases toward
+    /// `base + gust` with a [`WIND_SMOOTH_TAU`] time constant: gust noise
+    /// reaches balls, particles, clouds, and the gauge as a gradual glide,
+    /// never a twitch. `travel` integrates the speed so scenery can drift
+    /// with the wind instead of multiplying it by elapsed time.
     pub fn step(&mut self, dt: f32, rng: &mut Rng) {
         let noise = dt.sqrt();
         self.base -= WIND_REGIME_THETA * self.base * dt;
         self.base += WIND_REGIME_KICK * noise * rng.gauss();
-        self.speed += WIND_GUST_THETA * (self.base - self.speed) * dt;
-        self.speed += WIND_GUST_KICK * noise * rng.gauss();
+        self.gust -= WIND_GUST_THETA * self.gust * dt;
+        self.gust += WIND_GUST_KICK * noise * rng.gauss();
+        let target = (self.base + self.gust).clamp(-WIND_MAX, WIND_MAX);
+        self.speed += (target - self.speed) * (dt / WIND_SMOOTH_TAU).min(1.0);
         self.speed = self.speed.clamp(-WIND_MAX, WIND_MAX);
+        self.travel += self.speed * dt;
     }
 
     /// Live wind applied to balls, particles, clouds, and the HUD gauge.
     #[must_use]
     pub fn current(&self) -> f32 {
         self.speed
+    }
+
+    /// Distance the air has drifted (m): the time integral of the live
+    /// speed. Scenery (clouds) rides this instead of `speed × t`, which
+    /// jumps on every wind change; integrating makes wind response
+    /// gradual by construction.
+    #[must_use]
+    pub fn travel(&self) -> f32 {
+        self.travel
     }
 }
 

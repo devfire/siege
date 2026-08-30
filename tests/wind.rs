@@ -1,7 +1,8 @@
 //! Wind regression: the original sine swing pinned each round to one
 //! deterministic wind "story" and left the live value near-constant over a
 //! ball's ~4.5 s flight. Its replacement is two Ornstein–Uhlenbeck layers
-//! (slow regime base + fast gusts). The fairness invariants that must hold:
+//! (slow regime base + fast gusts) low-passed into the live speed, so the
+//! wind glides instead of twitching. The fairness invariants that must hold:
 //! round starts spread over both signs, the live wind keeps moving during
 //! one flight, |speed| never leaves the ±14 m/s envelope the rest of the
 //! suite tunes against, and rounds do not stay one-signed forever.
@@ -93,4 +94,29 @@ fn rounds_do_not_stay_one_signed() {
         frac >= 0.80,
         "only {crossed}/{SEEDS} rounds changed wind sign within 120 s"
     );
+}
+
+/// Smoothness contract: wind changes must be gradual — clouds, the HUD
+/// gauge, and in-flight aim all ride the live value. Direct per-substep
+/// noise on `speed` (the old twitch) is banned: adjacent substeps may
+/// differ by only a small fraction of a m/s, so nothing on screen can
+/// jerk when the wind shifts.
+#[test]
+fn wind_changes_are_gradual() {
+    const MAX_PER_SUBSTEP: f32 = 0.2;
+    for seed in 0..SEEDS as u64 {
+        let mut rng = Rng::seed(seed);
+        let mut wind = Wind::new(&mut rng);
+        let mut prev = wind.current();
+        for _ in 0..HORIZON_STEPS {
+            wind.step(DT, &mut rng);
+            let w = wind.current();
+            assert!(
+                (w - prev).abs() <= MAX_PER_SUBSTEP,
+                "seed {seed}: wind jumped {} m/s in one substep (> {MAX_PER_SUBSTEP})",
+                w - prev
+            );
+            prev = w;
+        }
+    }
 }
