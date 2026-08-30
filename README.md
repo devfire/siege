@@ -24,9 +24,8 @@ cargo test
 
 ### Controls
 - **Aim:** Mouse cursor position (barrel tracks cursor angle: 5°–80° elevation).
-- **Fire (Charge Mode):** Hold **Left Mouse Button (LMB)** to charge power (oscillates between 18% and 100%), release to fire.
-- **Fire (Direct Power):** **Spacebar** fires using the current static power setting.
-- **Adjust Base Power:** **Up / Down Arrow Keys** to adjust baseline power.
+- **Set Charge:** **Mouse Wheel** steps the charge (5% per notch, 18%–100%); it persists between shots.
+- **Fire:** **LMB** click or **Spacebar** fires at the current charge.
 - **Pause / Unpause:** **P** or **Escape**.
 - **Restart Match:** **R**.
 

@@ -116,19 +116,15 @@ pub(super) fn draw_ui(state: &GameState, font: Option<&macroquad::text::Font>) {
         draw_line(tipx, 54.0, tipx - dirx * 8.0, 49.0, 3.0, PARCHMENT);
         draw_line(tipx, 54.0, tipx - dirx * 8.0, 59.0, 3.0, PARCHMENT);
     }
-    // Aim/power readout, bottom-left. While holding LMB the readout tracks
-    // the live charge, not the stored power.
-    let shown_power = state.player.charging.unwrap_or(state.player.power);
+    // Aim/charge readout, bottom-left.
     let readout = format!(
-        "AIM {:.0}\u{00B0}   POWER {:.0}%",
+        "AIM {:.0}\u{00B0}   CHARGE {:.0}%",
         state.player.angle_deg,
-        shown_power * 100.0
+        state.player.charge * 100.0
     );
     txt(&readout, 24.0, h - 28.0, 24, PARCHMENT, font);
-    if let Some(c) = state.player.charging {
-        draw_rectangle(24.0, h - 20.0, 200.0, 8.0, PARCHMENT);
-        draw_rectangle(26.0, h - 18.0, 196.0 * c, 4.0, MID_HP);
-    }
+    draw_rectangle(24.0, h - 20.0, 200.0, 8.0, PARCHMENT);
+    draw_rectangle(26.0, h - 18.0, 196.0 * state.player.charge, 4.0, MID_HP);
     // Last three shot ranges, bottom-right.
     if !state.last_ranges.is_empty() {
         let panel_w = 150.0;
@@ -165,7 +161,7 @@ fn draw_overlays(state: &GameState, font: Option<&macroquad::text::Font>) {
             txt_centered("SIEGE!", w * 0.5, h * 0.42, 84, PARCHMENT, font);
             txt_centered("click to begin", w * 0.5, h * 0.52, 30, PARCHMENT, font);
             txt_centered(
-                "aim: mouse \u{00B7} power: arrows \u{00B7} fire: hold LMB or space",
+                "aim: mouse · charge: wheel · fire: click LMB or space",
                 w * 0.5,
                 h * 0.60,
                 22,

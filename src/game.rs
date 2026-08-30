@@ -7,8 +7,7 @@ use crate::render;
 use crate::rng::Rng;
 use crate::world::{self, Crater, Segment, SegmentKind};
 use macroquad::input::{
-    KeyCode, MouseButton, is_key_down, is_key_pressed, is_mouse_button_down,
-    is_mouse_button_pressed, is_mouse_button_released, mouse_position,
+    KeyCode, MouseButton, is_key_pressed, is_mouse_button_pressed, mouse_position, mouse_wheel,
 };
 use std::collections::VecDeque;
 
@@ -16,7 +15,7 @@ const AOE_R: f32 = 3.2;
 const SEG_DMG: f32 = 55.0;
 const CANNON_DMG: f32 = 60.0;
 const RELOAD: f32 = 3.5;
-const CHARGE_RATE: f32 = (1.0 - 0.18) / 1.1; // 0.18 → 1.0 in 1.1 s
+const CHARGE_STEP: f32 = 0.05; // per wheel notch
 const CRATER_CAP: usize = 24;
 const MARKER_CAP: usize = 6;
 const RANGE_CAP: usize = 3;
@@ -126,12 +125,9 @@ impl Wind {
 
 pub struct PlayerCannon {
     pub angle_deg: f32,
-    pub power: f32,
-    pub charging: Option<f32>,
+    pub charge: f32,
     pub hp: f32,
     pub reload: f32,
-    /// Ramp direction while ping-ponging the charge.
-    pub charge_dir: f32,
 }
 
 pub struct DefenderCannon {
@@ -174,11 +170,9 @@ impl GameState {
             timescale: 1.0,
             player: PlayerCannon {
                 angle_deg: 40.0,
-                power: 0.58,
-                charging: None,
+                charge: 0.58,
                 hp: 100.0,
                 reload: 0.0,
-                charge_dir: 1.0,
             },
             defender: DefenderCannon {
                 display_angle: 41.0,
@@ -205,7 +199,7 @@ impl GameState {
 
     /// Advance the duel by `dt_real` (unscaled wall-clock seconds).
     pub fn update(&mut self, dt_real: f32) {
-        self.handle_input(dt_real);
+        self.handle_input();
         if matches!(self.phase, Phase::Playing | Phase::Victory | Phase::Defeat) {
             let dt = dt_real * self.timescale;
             self.t += dt;
@@ -233,7 +227,7 @@ impl GameState {
         }
     }
 
-    fn handle_input(&mut self, dt: f32) {
+    fn handle_input(&mut self) {
         let clicked = is_mouse_button_pressed(MouseButton::Left);
         match self.phase {
             Phase::Menu => {
@@ -247,11 +241,6 @@ impl GameState {
                 }
                 if is_key_pressed(KeyCode::R) {
                     self.restart();
-                }
-                // Release during pause cancels the in-progress charge; letting it
-                // linger would soft-lock the Space fire shortcut after unpause.
-                if is_mouse_button_released(MouseButton::Left) {
-                    self.player.charging = None;
                 }
             }
             Phase::Playing => {
@@ -269,35 +258,17 @@ impl GameState {
                 let pivot = world::player_pivot();
                 let ang = (m.y - pivot.y).atan2(m.x - pivot.x).to_degrees();
                 self.player.angle_deg = ang.clamp(5.0, 80.0);
-                // Power: arrows held.
-                let mut power = self.player.power;
-                if is_key_down(KeyCode::Up) {
-                    power += 0.6 * dt;
+                // Charge: wheel notches set it; persists between shots.
+                let (_, wheel_y) = mouse_wheel();
+                if wheel_y != 0.0 {
+                    self.player.charge =
+                        (self.player.charge + wheel_y.signum() * CHARGE_STEP).clamp(0.18, 1.0);
                 }
-                if is_key_down(KeyCode::Down) {
-                    power -= 0.6 * dt;
+                if clicked {
+                    self.fire_player();
                 }
-                self.player.power = power.clamp(0.18, 1.0);
-                // Charge: hold LMB, ramp 0.18→1.0 then ping-pong; release fires.
-                if is_mouse_button_down(MouseButton::Left) && self.player.reload <= 0.0 {
-                    let v = self.player.charging.get_or_insert(0.18);
-                    *v += self.player.charge_dir * CHARGE_RATE * dt;
-                    if *v >= 1.0 {
-                        *v = 1.0;
-                        self.player.charge_dir = -1.0;
-                    }
-                    if *v <= 0.18 {
-                        *v = 0.18;
-                        self.player.charge_dir = 1.0;
-                    }
-                }
-                if is_mouse_button_released(MouseButton::Left) {
-                    if let Some(c) = self.player.charging.take() {
-                        self.fire_player(c);
-                    }
-                }
-                if is_key_pressed(KeyCode::Space) && self.player.charging.is_none() {
-                    self.fire_player(self.player.power);
+                if is_key_pressed(KeyCode::Space) {
+                    self.fire_player();
                 }
             }
             Phase::Victory | Phase::Defeat => {
@@ -312,12 +283,12 @@ impl GameState {
         }
     }
 
-    fn fire_player(&mut self, charge: f32) {
+    fn fire_player(&mut self) {
         if self.phase != Phase::Playing || self.player.reload > 0.0 {
             return;
         }
         let pivot = world::player_pivot();
-        let (pos, vel) = physics::launch(pivot, self.player.angle_deg, charge, 1.0);
+        let (pos, vel) = physics::launch(pivot, self.player.angle_deg, self.player.charge, 1.0);
         let a = self.player.angle_deg.to_radians();
         self.particles.spawn_muzzle(
             pos,

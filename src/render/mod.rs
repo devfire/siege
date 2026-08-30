@@ -305,7 +305,7 @@ fn draw_aim(state: &GameState, shake: Vec2) {
     };
     let pivot = world::player_pivot();
     let start = pivot + dir * physics::BARREL_LEN;
-    let charge = state.player.charging.unwrap_or(state.player.power);
+    let charge = state.player.charge;
     let v0 = (charge * physics::MUZZLE_V_MAX).max(1.0);
     let wind = state.wind.current();
     // Integrate the real ballistic model (drag + current wind) for the
