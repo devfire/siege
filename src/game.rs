@@ -12,9 +12,9 @@ use macroquad::input::{
 use std::collections::VecDeque;
 
 const AOE_R: f32 = 3.2;
-const SEG_DMG: f32 = 55.0;
+const SEG_DMG: f32 = 10.0;
 const CANNON_DMG: f32 = 60.0;
-const RELOAD: f32 = 3.5;
+const RELOAD: f32 = 1.0;
 const CHARGE_STEP: f32 = 0.05; // per wheel notch
 const CRATER_CAP: usize = 24;
 const MARKER_CAP: usize = 6;
