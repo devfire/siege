@@ -1031,11 +1031,13 @@ fn draw_ui(state: &GameState, font: Option<&macroquad::text::Font>) {
         draw_line(tipx, 54.0, tipx - dirx * 8.0, 49.0, 3.0, PARCHMENT);
         draw_line(tipx, 54.0, tipx - dirx * 8.0, 59.0, 3.0, PARCHMENT);
     }
-    // Aim/power readout, bottom-left.
+    // Aim/power readout, bottom-left. While holding LMB the readout tracks
+    // the live charge, not the wheel-set power.
+    let shown_power = state.player.charging.unwrap_or(state.player.power);
     let readout = format!(
         "AIM {:.0}\u{00B0}   POWER {:.0}%",
         state.player.angle_deg,
-        state.player.power * 100.0
+        shown_power * 100.0
     );
     txt(&readout, 24.0, h - 28.0, 24, PARCHMENT, font);
     if let Some(c) = state.player.charging {
