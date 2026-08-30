@@ -153,6 +153,11 @@ pub struct Ball {
     pub vel: V2,
     pub side: Side,
     pub trail: VecDeque<V2>,
+    /// Accumulated visual rotation (rad). Presentation state like `trail`:
+    /// the renderer's surface dimples ride it so the ball visibly rolls.
+    pub spin: f32,
+    /// Set once the falling whistle has fired for this ball.
+    pub whistled: bool,
 }
 
 impl Ball {

@@ -2,6 +2,7 @@
 
 use crate::ai;
 use crate::audio::Audio;
+use crate::fallers::Fallers;
 use crate::particles::Particles;
 use crate::physics::{self, BALL_R, Ball, DT, Obstacle, Side, V2};
 use crate::render;
@@ -21,6 +22,12 @@ const RELOAD: f32 = 1.0;
 const PRIME_PLAYER: f32 = 0.32;
 const PRIME_DEFENDER: f32 = 0.55;
 const CHARGE_STEP: f32 = 0.05; // per wheel notch
+/// Lead time (s) before impact at which the falling-ball whistle fires;
+/// matches the synthesized whistle length.
+const WHISTLE_LEAD: f32 = 1.5;
+/// Visual spin rate (rad/s per m/s of horizontal travel) — ~7× slower
+/// than true rolling so the dimples read at 60 fps instead of strobing.
+const SPIN_RATE: f32 = 0.4;
 const CRATER_CAP: usize = 24;
 const MARKER_CAP: usize = 6;
 const RANGE_CAP: usize = 3;
@@ -159,6 +166,8 @@ pub struct GameState {
     pub ai: ai::DefenderAi,
     pub balls: Vec<Ball>,
     pub particles: Particles,
+    /// Defenders flung off collapsing walls (tumble, bounce, fade).
+    pub fallers: Fallers,
     pub segments: Vec<Segment>,
     pub craters: VecDeque<Crater>,
     pub wind: Wind,
@@ -216,6 +225,7 @@ impl GameState {
             ai: ai::DefenderAi::new(),
             balls: Vec::new(),
             particles: Particles::new(),
+            fallers: Fallers::new(),
             segments: world::castle_segments(),
             craters: VecDeque::new(),
             wind,
@@ -235,6 +245,7 @@ impl GameState {
     /// Advance the duel by `dt_real` (unscaled wall-clock seconds).
     pub fn update(&mut self, dt_real: f32, audio: &mut Audio) {
         audio.set_wind(self.wind.current());
+        audio.set_birds(self.wind.current());
         self.handle_input(audio);
         if matches!(self.phase, Phase::Playing | Phase::Victory | Phase::Defeat) {
             let dt = dt_real * self.timescale;
@@ -258,6 +269,7 @@ impl GameState {
             }
             let wind = self.wind.current();
             self.particles.update(dt, wind);
+            self.fallers.update(dt);
             self.particles.spawn_leaves(wind, &mut self.rng, dt);
             self.shake = (self.shake * (-dt / SHAKE_TAU).exp()).max(0.0);
             if self.phase != Phase::Playing {
@@ -272,23 +284,28 @@ impl GameState {
             Phase::Menu => {
                 if clicked {
                     self.phase = Phase::Playing;
+                    audio.click();
                 }
             }
             Phase::Paused => {
                 if is_key_pressed(KeyCode::P) || is_key_pressed(KeyCode::Escape) {
                     self.phase = Phase::Playing;
+                    audio.click();
                 }
                 if is_key_pressed(KeyCode::R) {
                     self.restart();
+                    audio.click();
                 }
             }
             Phase::Playing => {
                 if is_key_pressed(KeyCode::P) || is_key_pressed(KeyCode::Escape) {
                     self.phase = Phase::Paused;
+                    audio.click();
                     return;
                 }
                 if is_key_pressed(KeyCode::R) {
                     self.restart();
+                    audio.click();
                     return;
                 }
                 // Aim: barrel tracks the cursor.
@@ -313,10 +330,12 @@ impl GameState {
             Phase::Victory | Phase::Defeat => {
                 if is_key_pressed(KeyCode::R) {
                     self.restart();
+                    audio.click();
                     return;
                 }
                 if clicked && self.end_t >= END_HOLD {
                     self.restart();
+                    audio.click();
                 }
             }
         }
@@ -349,6 +368,8 @@ impl GameState {
             vel,
             side: Side::Player,
             trail: VecDeque::new(),
+            spin: 0.0,
+            whistled: false,
         });
         self.player.reload = RELOAD;
         self.player.recoil = 1.0;
@@ -420,6 +441,8 @@ impl GameState {
             vel,
             side: Side::Defender,
             trail: VecDeque::new(),
+            spin: 0.0,
+            whistled: false,
         });
         self.defender.reload_anim = 1.0;
         self.defender.recoil = 1.0;
@@ -438,6 +461,24 @@ impl GameState {
             let (np, nv) = physics::step(ball.pos, ball.vel, wind, DT);
             ball.pos = np;
             ball.vel = nv;
+            ball.spin += ball.vel.x * SPIN_RATE * DT;
+            if !ball.whistled && ball.vel.y < 0.0 {
+                let gh = world::ground_height(ball.pos.x);
+                let h = ball.pos.y - gh;
+                if h > 5.0 {
+                    // Drag-free time-to-ground estimate — close enough to
+                    // time the cue; the landing itself stays with contact.
+                    let t_land = (ball.vel.y
+                        + (ball.vel.y * ball.vel.y + 2.0 * physics::G * h).sqrt())
+                        / physics::G;
+                    if t_land <= WHISTLE_LEAD {
+                        ball.whistled = true;
+                        let pp = world::player_pivot();
+                        let near = (1.0 - (ball.pos.x - pp.x).abs() / 200.0).clamp(0.0, 1.0);
+                        audio.whistle(0.12 + 0.55 * near);
+                    }
+                }
+            }
             if np.x < -5.0 || np.x > 205.0 {
                 despawn.push(i);
             } else if let Some((at, ground)) = contact(prev, ball, &self.segments, keep_alive) {
@@ -463,7 +504,7 @@ impl GameState {
         self.particles.spawn_explosion(at, &mut self.rng);
         let pp = world::player_pivot();
         let near = (1.0 - (at.x - pp.x).abs() / 200.0).clamp(0.0, 1.0);
-        audio.impact(near);
+        audio.impact(near, ground_contact);
         let gh = world::ground_height(at.x);
         if at.y <= gh + BALL_R + 0.25 {
             if self.craters.len() >= CRATER_CAP {
@@ -476,7 +517,8 @@ impl GameState {
             self.particles.spawn_dust(at);
         }
         let mut fell = false;
-        for seg in &mut self.segments {
+        let mut flung: Vec<usize> = Vec::new();
+        for (ix, seg) in self.segments.iter_mut().enumerate() {
             if !seg.alive() {
                 continue;
             }
@@ -494,8 +536,14 @@ impl GameState {
                 seg.hp = (seg.hp - dmg).max(0.0);
                 if seg.hp <= 0.0 {
                     fell = true;
+                    flung.push(ix);
                 }
             }
+        }
+        // The wall-top runners are thrown from where they stood.
+        for ix in flung {
+            self.fallers
+                .fling_wall(&self.segments[ix], ix, at, self.t, &mut self.rng);
         }
         if fell {
             audio.crumble(near);

@@ -8,7 +8,7 @@
     clippy::cast_lossless
 )]
 
-use super::{GRASS_LOW, SKY_TOP, STONE, WORLD_W, darken, hash2, mix, origin, scale, w2s};
+use super::{GRASS_LOW, SKY_TOP, STONE, WORLD_H, WORLD_W, darken, hash2, mix, origin, scale, w2s};
 use crate::game::GameState;
 use crate::physics::V2;
 use crate::rng::Rng;
@@ -331,4 +331,39 @@ fn draw_ground_dressing(state: &GameState, to_px: &dyn Fn(V2) -> Vec2, sc: f32) 
 /// Shared wind lean for grass (unit-ish, small).
 pub(super) fn wind_lean(state: &GameState) -> f32 {
     state.wind.current() * 0.03
+}
+
+/// Slowly swaying light shafts fanning from the sun across the dawn
+/// sky. Drawn before the clouds so weather passes in front of the rays.
+pub(super) fn draw_god_rays(state: &GameState, shake: Vec2) {
+    let s = scale();
+    let sun = w2s(V2 { x: 60.0, y: 78.0 }) + shake * 0.1;
+    for i in 0..5u32 {
+        let h = hash2(i + 61, 21);
+        let sway = (state.t * 0.05 + h * std::f32::consts::TAU).sin() * 0.05;
+        let ang = (i as f32 - 2.0) * 0.22 + sway; // rad off vertical
+        let dir = vec2(ang.sin(), ang.cos()); // screen space: +y is down
+        let perp = vec2(-dir.y, dir.x);
+        let reach = WORLD_H * 1.2 * s;
+        let half = (1.8 + 2.8 * h) * s;
+        draw_triangle(
+            sun,
+            sun + dir * reach + perp * half,
+            sun + dir * reach - perp * half,
+            Color::new(1.0, 0.93, 0.78, 0.03 + 0.02 * h),
+        );
+    }
+}
+
+/// Subtle frame shading: nested dark bands on each edge, drawn after the
+/// world and under the HUD — sells the painted-tableau framing.
+pub(super) fn draw_vignette() {
+    let (w, h) = (screen_width(), screen_height());
+    for (band, a) in [(110.0_f32, 0.045), (60.0, 0.06), (28.0, 0.08)] {
+        let c = Color::new(0.06, 0.04, 0.1, a);
+        draw_rectangle(0.0, 0.0, w, band, c);
+        draw_rectangle(0.0, h - band, w, band, c);
+        draw_rectangle(0.0, 0.0, band, h, c);
+        draw_rectangle(w - band, 0.0, band, h, c);
+    }
 }

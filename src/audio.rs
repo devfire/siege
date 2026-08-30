@@ -156,6 +156,93 @@ fn synth_fuse() -> Vec<i16> {
     out
 }
 
+/// Falling-ball whistle: descending exponential sweep with vibrato and a
+/// quadratic swell — the incoming-shot warning, fired on the final
+/// stretch of a ball's descent.
+fn synth_whistle() -> Vec<i16> {
+    let len = 1.5_f32;
+    let n = (len * RATE as f32) as usize;
+    let mut out = Vec::with_capacity(n);
+    let mut phase = 0.0_f32;
+    for i in 0..n {
+        let t = i as f32 / RATE as f32;
+        let f = 1_500.0 * (380.0 / 1_500.0_f32).powf(t / len)
+            + 35.0 * (std::f32::consts::TAU * 19.0 * t).sin();
+        phase += std::f32::consts::TAU * f / RATE as f32;
+        let swell = (t / len).powi(2);
+        out.push(((phase.sin() * swell * 0.85).clamp(-1.0, 1.0) * f32::from(i16::MAX)) as i16);
+    }
+    out
+}
+
+/// Earth thud for ground impacts: a muffled body sweep under soft dirt
+/// grains — clearly softer and duller than the stone crack.
+fn synth_thud() -> Vec<i16> {
+    let len = 0.55_f32;
+    let n = (len * RATE as f32) as usize;
+    let mut out = Vec::with_capacity(n);
+    let mut rng = Rng::seed(0x70D);
+    let mut lp = Lp::new(0.07);
+    let mut phase = 0.0_f32;
+    for i in 0..n {
+        let t = i as f32 / RATE as f32;
+        let env = (-t * 7.0_f32).exp();
+        let f = 82.0 * (26.0_f32 / 82.0).powf(t / len);
+        phase += std::f32::consts::TAU * f / RATE as f32;
+        let body = phase.sin() * env * 0.9;
+        let dirt = lp.next((rng.f01() * 2.0 - 1.0).powi(3)) * env * 3.0;
+        out.push((((body + dirt) * 0.85).clamp(-1.0, 1.0) * f32::from(i16::MAX)) as i16);
+    }
+    out
+}
+
+/// UI tick for menu / restart / pause: a dry wooden knock.
+fn synth_click() -> Vec<i16> {
+    let len = 0.07_f32;
+    let n = (len * RATE as f32) as usize;
+    let mut out = Vec::with_capacity(n);
+    let mut rng = Rng::seed(0xC11);
+    let mut phase = 0.0_f32;
+    for i in 0..n {
+        let t = i as f32 / RATE as f32;
+        let f = 1_050.0 * (480.0 / 1_050.0_f32).powf(t / len);
+        phase += std::f32::consts::TAU * f / RATE as f32;
+        let body = phase.sin() * (-t * 55.0).exp() * 0.85;
+        let tap = (rng.f01() * 2.0 - 1.0) * (-t * 400.0).exp() * 0.3;
+        out.push((((body + tap) * 0.9).clamp(-1.0, 1.0) * f32::from(i16::MAX)) as i16);
+    }
+    out
+}
+
+/// Ambient birdsong bed: 16 sparse FM-warbled chirps scattered over 9 s.
+/// Both seam margins stay silent, so the loop point is inaudible.
+fn synth_birdsong() -> Vec<i16> {
+    let len = 9.0_f32;
+    let n = (len * RATE as f32) as usize;
+    let mut out = vec![0.0_f32; n];
+    let mut rng = Rng::seed(0xB1D);
+    for _ in 0..16 {
+        let start = (rng.range(0.4, 8.2) * RATE as f32) as usize;
+        let dur = rng.range(0.05, 0.14);
+        let m = (dur * RATE as f32) as usize;
+        let fc = rng.range(2_300.0, 4_300.0);
+        let depth = rng.range(200.0, 650.0);
+        let fm = rng.range(14.0, 38.0);
+        let amp = rng.range(0.35, 1.0);
+        let mut phase = 0.0_f32;
+        for i in 0..m.min(n - start) {
+            let t = i as f32 / RATE as f32;
+            phase += std::f32::consts::TAU * (fc + depth * (std::f32::consts::TAU * fm * t).sin())
+                / RATE as f32;
+            let env = (std::f32::consts::PI * t / dur).sin();
+            out[start + i] += phase.sin() * env * amp;
+        }
+    }
+    out.iter()
+        .map(|&s| ((s * 0.45).clamp(-1.0, 1.0) * f32::from(i16::MAX)) as i16)
+        .collect()
+}
+
 /// Note arpeggio; each note is a sine + soft octave with a percussive
 /// envelope. `step` is the note spacing, notes are `(freq, dur)`.
 fn synth_sting(notes: &[(f32, f32)], step: f32) -> Vec<i16> {
@@ -214,8 +301,14 @@ pub struct Audio {
     victory: Option<Sound>,
     defeat: Option<Sound>,
     wind: Option<Sound>,
+    whistle: Option<Sound>,
+    thud: Option<Sound>,
+    click: Option<Sound>,
+    birds: Option<Sound>,
     /// Last wind volume pushed to the mixer; gates per-frame FFI calls.
     wind_vol: f32,
+    /// Same gating for the birdsong bed.
+    birds_vol: f32,
 }
 
 impl Audio {
@@ -243,9 +336,22 @@ impl Audio {
         ))
         .await;
         let wind = Self::load(synth_wind()).await;
+        let whistle = Self::load(synth_whistle()).await;
+        let thud = Self::load(synth_thud()).await;
+        let click = Self::load(synth_click()).await;
+        let birds = Self::load(synth_birdsong()).await;
         if let Some(w) = &wind {
             play_sound(
                 w,
+                PlaySoundParams {
+                    looped: true,
+                    volume: 0.0,
+                },
+            );
+        }
+        if let Some(b) = &birds {
+            play_sound(
+                b,
                 PlaySoundParams {
                     looped: true,
                     volume: 0.0,
@@ -261,7 +367,12 @@ impl Audio {
             victory,
             defeat,
             wind,
+            whistle,
+            thud,
+            click,
+            birds,
             wind_vol: -1.0,
+            birds_vol: -1.0,
         }
     }
 
@@ -283,9 +394,24 @@ impl Audio {
         Self::play(self.boom_far.as_ref(), 0.45);
     }
 
-    /// Ball impact. `near` 0..1 scales presence by distance to the player.
-    pub fn impact(&self, near: f32) {
-        Self::play(self.impact.as_ref(), 0.45 + 0.5 * near);
+    /// Ball impact. `near` 0..1 scales presence by distance to the
+    /// player; `ground` picks the earth thud over the stone crack.
+    pub fn impact(&self, near: f32, ground: bool) {
+        if ground {
+            Self::play(self.thud.as_ref(), 0.45 + 0.4 * near);
+        } else {
+            Self::play(self.impact.as_ref(), 0.45 + 0.5 * near);
+        }
+    }
+
+    /// Falling-ball warning, fired once per ball on its final descent.
+    pub fn whistle(&self, volume: f32) {
+        Self::play(self.whistle.as_ref(), volume);
+    }
+
+    /// UI tick for menu / restart / pause.
+    pub fn click(&self) {
+        Self::play(self.click.as_ref(), 0.5);
     }
 
     pub fn crumble(&self, near: f32) {
@@ -314,6 +440,19 @@ impl Audio {
         self.wind_vol = target;
         if let Some(w) = &self.wind {
             set_sound_volume(w, target);
+        }
+    }
+
+    /// Ride the birdsong bed inversely to the wind — birds go quiet in a
+    /// blow. Same ±0.01 mixer gating as the wind bed.
+    pub fn set_birds(&mut self, wind_ms: f32) {
+        let target = (0.13 - wind_ms.abs() / 14.0 * 0.11).max(0.02);
+        if (target - self.birds_vol).abs() < 0.01 {
+            return;
+        }
+        self.birds_vol = target;
+        if let Some(b) = &self.birds {
+            set_sound_volume(b, target);
         }
     }
 }

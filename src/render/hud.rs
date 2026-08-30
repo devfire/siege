@@ -117,14 +117,7 @@ pub(super) fn draw_ui(state: &GameState, font: Option<&macroquad::text::Font>) {
         draw_line(tipx, 54.0, tipx - dirx * 8.0, 59.0, 3.0, PARCHMENT);
     }
     // Aim/charge readout, bottom-left.
-    let readout = format!(
-        "AIM {:.0}\u{00B0}   CHARGE {:.0}%",
-        state.player.angle_deg,
-        state.player.charge * 100.0
-    );
-    txt(&readout, 24.0, h - 28.0, 24, PARCHMENT, font);
-    draw_rectangle(24.0, h - 20.0, 200.0, 8.0, PARCHMENT);
-    draw_rectangle(26.0, h - 18.0, 196.0 * state.player.charge, 4.0, MID_HP);
+    draw_charge_gauge(state, font, h);
     // Last three shot ranges, bottom-right.
     if !state.last_ranges.is_empty() {
         let panel_w = 150.0;
@@ -151,6 +144,35 @@ pub(super) fn draw_ui(state: &GameState, font: Option<&macroquad::text::Font>) {
         }
     }
     draw_overlays(state, font);
+}
+
+/// Aim/charge readout, bottom-left. While the touch-hole fuse burns the
+/// readout flips to FIRING and a pulsing ember sweep crosses the gauge,
+/// so the telegraph is legible at a glance.
+fn draw_charge_gauge(state: &GameState, font: Option<&macroquad::text::Font>, h: f32) {
+    let firing = state.player.fuse > 0.0;
+    let readout = if firing {
+        format!("AIM {:.0}\u{00B0}   FIRING", state.player.angle_deg)
+    } else {
+        format!(
+            "AIM {:.0}\u{00B0}   CHARGE {:.0}%",
+            state.player.angle_deg,
+            state.player.charge * 100.0
+        )
+    };
+    txt(&readout, 24.0, h - 28.0, 24, PARCHMENT, font);
+    draw_rectangle(24.0, h - 20.0, 200.0, 8.0, PARCHMENT);
+    draw_rectangle(26.0, h - 18.0, 196.0 * state.player.charge, 4.0, MID_HP);
+    if firing {
+        let pulse = 0.5 + 0.5 * (state.t * 24.0).sin();
+        draw_rectangle(
+            26.0,
+            h - 18.0,
+            196.0 * state.player.fuse_progress(),
+            4.0,
+            Color::new(1.0, 0.42 + 0.3 * pulse, 0.12, 0.95),
+        );
+    }
 }
 
 fn draw_overlays(state: &GameState, font: Option<&macroquad::text::Font>) {

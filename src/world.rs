@@ -131,6 +131,53 @@ pub fn rubble_rect(seg: &Segment) -> (f32, f32, f32, f32) {
     (seg.x0, seg.y0, seg.w, seg.h * 0.25)
 }
 
+/// Deterministic 0..1 hash of two integers (bricks, tufts, runner slots).
+/// Shared by the sim and the renderer so both derive the same runner
+/// layout — when a wall falls, the flung bodies leave from the exact
+/// positions the drawn runners occupied that frame.
+#[must_use]
+pub fn hash2(a: u32, b: u32) -> f32 {
+    let mut h = a
+        .wrapping_mul(374_761_393)
+        .wrapping_add(b.wrapping_mul(668_265_263));
+    h = (h ^ (h >> 13)).wrapping_mul(1_274_126_177);
+    let v = (h ^ (h >> 16)) & 0xFFFF;
+    #[allow(clippy::cast_possible_truncation)] // masked to 16 bits above
+    let wide = v as u16;
+    f32::from(wide) / 65_535.0
+}
+
+/// Wall-top patrol density: one runner per 5 m of tower or curtain.
+#[must_use]
+#[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)] // w ≥ 0, small
+pub fn runner_count(seg: &Segment) -> u32 {
+    match seg.kind {
+        SegmentKind::Tower | SegmentKind::Curtain => (seg.w / 5.0) as u32,
+        SegmentKind::Gate | SegmentKind::Keep => 0,
+    }
+}
+
+/// Runner `k` on segment `ix` at time `t` → `(x, facing, phase_seed)`:
+/// ping-pong position along the parapet, stride direction (+1/−1), and
+/// the hash seeding the stride cycle. Pure function of `t`, so drawing
+/// and death-flinging always agree on where a runner stands.
+#[must_use]
+pub fn runner_state(seg: &Segment, ix: usize, k: u32, t: f32) -> (f32, f32, f32) {
+    let seed = u32::try_from(ix).unwrap_or(0) + 1;
+    let h1 = hash2(seed * 13 + k, 5);
+    let h2 = hash2(seed * 13 + k, 9);
+    let period = 7.0 + 6.0 * h2;
+    let lap = (t / period + h1).rem_euclid(1.0);
+    let tri = 1.0 - (2.0 * lap - 1.0).abs();
+    let margin = 1.3;
+    let span = (seg.w - 2.0 * margin).max(0.5);
+    (
+        seg.x0 + margin + span * tri,
+        if lap < 0.5 { 1.0 } else { -1.0 },
+        h1,
+    )
+}
+
 /// Ground scar from an impact. Capped at 24, oldest dropped.
 pub struct Crater {
     pub x: f32,

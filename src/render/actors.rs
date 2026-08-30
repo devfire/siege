@@ -9,10 +9,11 @@
     clippy::cast_lossless
 )]
 
-use super::{hash2, scale, w2s};
+use super::{scale, w2s};
+use crate::fallers::Fallers;
 use crate::game::GameState;
 use crate::physics::V2;
-use crate::world::{self, SegmentKind};
+use crate::world;
 use macroquad::color::Color;
 use macroquad::math::Vec2;
 use macroquad::shapes::{draw_circle, draw_line, draw_rectangle};
@@ -30,6 +31,7 @@ pub(super) fn draw(state: &GameState, shake: Vec2) {
     let off = shake;
     let w = |p: V2| w2s(p) + off;
     draw_wall_runners(state, &w);
+    draw_fallers(&state.fallers, &w);
     draw_player_crew(state, &w);
 }
 
@@ -42,22 +44,11 @@ fn draw_wall_runners(state: &GameState, w: &dyn Fn(V2) -> Vec2) {
         if !seg.alive() {
             continue;
         }
-        let count = match seg.kind {
-            SegmentKind::Tower | SegmentKind::Curtain => (seg.w / 5.0) as u32,
-            _ => 0,
-        };
         let top = seg.y0 + seg.h;
-        let seed = ix as u32 + 1;
-        for k in 0..count {
-            let h1 = hash2(seed * 13 + k, 5);
-            let h2 = hash2(seed * 13 + k, 9);
-            let period = 7.0 + 6.0 * h2;
-            let lap = (state.t / period + h1).rem_euclid(1.0);
-            let tri = 1.0 - (2.0 * lap - 1.0).abs();
-            let margin = 1.3;
-            let span = (seg.w - 2.0 * margin).max(0.5);
-            let rx = seg.x0 + margin + span * tri;
-            let dir = if lap < 0.5 { 1.0 } else { -1.0 };
+        for k in 0..world::runner_count(seg) {
+            // Layout lives in `world` so the fling on collapse spawns the
+            // bodies exactly where the drawn runners stood.
+            let (rx, dir, h1) = world::runner_state(seg, ix, k, state.t);
             let mut duck = 0.0_f32;
             for b in &state.balls {
                 let dx = (b.pos.x - rx).abs();
@@ -211,4 +202,52 @@ fn draw_figure(w: &dyn Fn(V2) -> Vec2, s: f32, x: f32, fy: f32, h: f32, swing: f
         head_r * 0.55 * s,
         HELM,
     );
+}
+
+/// Flung defenders from `Fallers`: tumbling ragdolls that ease flat and
+/// fade where they landed. Drawn after the live runners so the bodies
+/// lay over the fresh rubble.
+fn draw_fallers(fs: &Fallers, w: &dyn Fn(V2) -> Vec2) {
+    let s = scale();
+    for f in &fs.list {
+        let fade = (f.life / 0.8).clamp(0.0, 1.0);
+        // At rest the body eases toward lying flat; mid-tumble it spins.
+        let target = (f.ang / std::f32::consts::PI).round() * std::f32::consts::PI;
+        let ang = f.ang + (target - f.ang) * (f.rest_t * 6.0).min(1.0);
+        let body = V2 {
+            x: ang.cos(),
+            y: ang.sin(),
+        };
+        let fig = Color::new(FIG.r, FIG.g, FIG.b, fade);
+        let liv = Color::new(LIVERY.r, LIVERY.g, LIVERY.b, fade);
+        // Torso in livery, helmeted head along the body axis.
+        let t0 = w(f.pos - body * 0.28);
+        let t1 = w(f.pos + body * 0.28);
+        draw_line(t0.x, t0.y, t1.x, t1.y, (0.13 * s).max(2.0), liv);
+        let head = w(f.pos + body * 0.45);
+        draw_circle(head.x, head.y, (0.11 * s).max(1.8), fig);
+        draw_circle(
+            head.x + body.x * 0.03 * s,
+            head.y + body.y * 0.03 * s,
+            (0.05 * s).max(1.0),
+            Color::new(HELM.r, HELM.g, HELM.b, fade),
+        );
+        // Flailing limbs: legs from the hip end, arms from the shoulder
+        // end, wiggling with the tumble phase.
+        let wig = (f.life * 13.0).sin() * 0.25;
+        for (along, off) in [
+            (-0.22_f32, std::f32::consts::PI + 0.6 + wig),
+            (-0.22_f32, std::f32::consts::PI - 0.6 + wig),
+            (0.18_f32, 2.4 - wig),
+            (0.18_f32, -2.4 - wig),
+        ] {
+            let limb = V2 {
+                x: off.cos(),
+                y: off.sin(),
+            };
+            let hip = w(f.pos + body * along);
+            let tip = w(f.pos + body * along + limb * 0.34);
+            draw_line(hip.x, hip.y, tip.x, tip.y, (0.08 * s).max(1.5), fig);
+        }
+    }
 }

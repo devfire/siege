@@ -1,5 +1,6 @@
 pub mod ai;
 pub mod audio;
+pub mod fallers;
 pub mod game;
 pub mod particles;
 pub mod physics;

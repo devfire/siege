@@ -23,6 +23,10 @@ use macroquad::shapes::{
 
 use macroquad::window::{screen_height, screen_width};
 
+// Hash moved to `world` so the sim (runner slots, fling spawns) and the
+// renderer share one deterministic layout.
+pub(super) use crate::world::hash2;
+
 pub const WORLD_W: f32 = 200.0;
 pub const WORLD_H: f32 = 112.5;
 const PAGE_BG: Color = Color::from_hex(0x1A_14_23);
@@ -83,18 +87,6 @@ pub(super) fn darken(c: Color, amt: f32) -> Color {
     mix(c, Color::new(0.0, 0.0, 0.0, c.a), amt)
 }
 
-/// Deterministic 0..1 hash of two integers (for bricks, tufts, cracks…).
-pub(super) fn hash2(a: u32, b: u32) -> f32 {
-    let mut h = a
-        .wrapping_mul(374_761_393)
-        .wrapping_add(b.wrapping_mul(668_265_263));
-    h = (h ^ (h >> 13)).wrapping_mul(1_274_126_177);
-    let v = (h ^ (h >> 16)) & 0xFFFF;
-    #[allow(clippy::cast_possible_truncation)] // masked to 16 bits above
-    let wide = v as u16;
-    f32::from(wide) / 65_535.0
-}
-
 pub fn draw(state: &GameState, font: Option<&macroquad::text::Font>) {
     macroquad::window::clear_background(PAGE_BG);
     let s = scale();
@@ -106,6 +98,7 @@ pub fn draw(state: &GameState, font: Option<&macroquad::text::Font>) {
     draw_rectangle(ox, oy, WORLD_W * s, WORLD_H * s, SKY_TOP);
     draw_sky(shake);
     draw_sun(shake * 0.1);
+    draw_god_rays(state, shake * 0.1);
     draw_clouds(state, shake);
     draw_mountains(shake);
     draw_birds(state, shake);
@@ -123,6 +116,7 @@ pub fn draw(state: &GameState, font: Option<&macroquad::text::Font>) {
         },
         s,
     );
+    draw_vignette();
     draw_hurt(state);
     draw_ui(state, font);
 }
@@ -134,7 +128,10 @@ mod scenery;
 
 use castle::draw_castle;
 use hud::draw_ui;
-use scenery::{draw_birds, draw_clouds, draw_ground, draw_mountains, draw_sky, draw_sun};
+use scenery::{
+    draw_birds, draw_clouds, draw_god_rays, draw_ground, draw_mountains, draw_sky, draw_sun,
+    draw_vignette,
+};
 
 fn draw_cannons(state: &GameState, shake: Vec2) {
     let s = scale();
@@ -364,6 +361,18 @@ fn draw_balls(state: &GameState, shake: Vec2) {
         // Visual radius floors keep the ball readable at small window scales.
         let r = (BALL_R * s).max(3.5);
         draw_circle(v.x, v.y, r, BALL_C);
+        // Surface dimples riding `spin`: the ball visibly rolls with its
+        // travel instead of sliding.
+        for dimp in 0..3u16 {
+            let spot_a = b.spin + f32::from(dimp) * std::f32::consts::TAU / 3.0;
+            let spot = vec2(v.x + spot_a.cos() * r * 0.55, v.y + spot_a.sin() * r * 0.55);
+            draw_circle(
+                spot.x,
+                spot.y,
+                (r * 0.2).max(1.2),
+                Color::new(0.15, 0.15, 0.19, 0.8),
+            );
+        }
         draw_circle(
             v.x - r * 0.3,
             v.y - r * 0.32,
