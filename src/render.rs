@@ -1032,7 +1032,7 @@ fn draw_ui(state: &GameState, font: Option<&macroquad::text::Font>) {
         draw_line(tipx, 54.0, tipx - dirx * 8.0, 59.0, 3.0, PARCHMENT);
     }
     // Aim/power readout, bottom-left. While holding LMB the readout tracks
-    // the live charge, not the wheel-set power.
+    // the live charge, not the stored power.
     let shown_power = state.player.charging.unwrap_or(state.player.power);
     let readout = format!(
         "AIM {:.0}\u{00B0}   POWER {:.0}%",
@@ -1080,7 +1080,7 @@ fn draw_overlays(state: &GameState, font: Option<&macroquad::text::Font>) {
             txt_centered("SIEGE!", w * 0.5, h * 0.42, 84, PARCHMENT, font);
             txt_centered("click to begin", w * 0.5, h * 0.52, 30, PARCHMENT, font);
             txt_centered(
-                "aim: mouse \u{00B7} power: wheel / arrows \u{00B7} fire: hold LMB or space",
+                "aim: mouse \u{00B7} power: arrows \u{00B7} fire: hold LMB or space",
                 w * 0.5,
                 h * 0.60,
                 22,

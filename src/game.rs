@@ -8,7 +8,7 @@ use crate::rng::Rng;
 use crate::world::{self, Crater, Segment, SegmentKind};
 use macroquad::input::{
     KeyCode, MouseButton, is_key_down, is_key_pressed, is_mouse_button_down,
-    is_mouse_button_pressed, is_mouse_button_released, mouse_position, mouse_wheel,
+    is_mouse_button_pressed, is_mouse_button_released, mouse_position,
 };
 
 const AOE_R: f32 = 3.2;
@@ -191,9 +191,8 @@ impl GameState {
                 let pivot = world::player_pivot();
                 let ang = (m.y - pivot.y).atan2(m.x - pivot.x).to_degrees();
                 self.player.angle_deg = ang.clamp(5.0, 80.0);
-                // Power: mouse wheel notches ± arrows held.
-                let wheel = mouse_wheel().1;
-                let mut power = self.player.power - wheel * 0.03;
+                // Power: arrows held.
+                let mut power = self.player.power;
                 if is_key_down(KeyCode::Up) {
                     power += 0.6 * dt;
                 }
