@@ -5,7 +5,7 @@ edition = "2024"
 rust-version = "1.85"
 
 [dependencies]
-macroquad = "0.4.16"
+macroquad = { version = "0.4.16", features = ["audio"] }
 
 [lints.rust]
 unsafe_code = "warn"

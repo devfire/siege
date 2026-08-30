@@ -1,0 +1,7 @@
+# quad-snd 0.2.8's wasm backend declares its audio_* externs without
+# #[link(wasm_import_module = "env")], so wasm-ld treats them as plain
+# undefined symbols and the link fails. mq_js_bundle.js provides these
+# functions as env-module imports at runtime (miniquad plugin), so ask
+# the linker to emit them as imports instead of resolving them.
+[target.wasm32-unknown-unknown]
+rustflags = ["-C", "link-arg=--import-undefined"]
