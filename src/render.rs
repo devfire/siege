@@ -178,7 +178,6 @@ pub fn draw(state: &GameState, font: Option<&macroquad::text::Font>) {
 }
 
 fn draw_sky(shake: Vec2) {
-    let s = scale();
     let (_, oy) = origin();
     let horizon = w2s(V2 { x: 0.0, y: 0.0 }).y + shake.y;
     let bands = 26u16;
@@ -198,7 +197,6 @@ fn draw_sky(shake: Vec2) {
             col,
         );
     }
-    let _ = s;
 }
 
 fn draw_sun(shake: Vec2) {
@@ -283,9 +281,7 @@ fn mountain_layer(shake: Vec2, r: &Ridge) {
     let mut ix = 0i32;
     while ix <= 44 {
         let x = -10.0 + 5.0 * ix as f32;
-        let y = r.base
-            + r.amp1 * (r.f1 * x + r.p1).sin()
-            + r.amp2 * (r.f2 * x + r.p2).sin();
+        let y = r.base + r.amp1 * (r.f1 * x + r.p1).sin() + r.amp2 * (r.f2 * x + r.p2).sin();
         let pt = w2s(V2 { x, y }) + off;
         if let Some(prev_pt) = prev {
             let bl = vec2(prev_pt.x, bottom);
@@ -1062,7 +1058,7 @@ fn draw_ui(state: &GameState, font: Option<&macroquad::text::Font>) {
         txt("LAST SHOTS", x0 + 10.0, y0 + 18.0, 16, INK, font);
         for (i, r) in state.last_ranges.iter().enumerate() {
             txt(
-                &format!("{:.0} m", r),
+                &format!("{r:.0} m"),
                 x0 + 10.0,
                 y0 + 40.0 + 20.0 * i as f32,
                 18,
