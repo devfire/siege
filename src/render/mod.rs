@@ -308,25 +308,27 @@ fn draw_aim(state: &GameState, shake: Vec2) {
     let start = pivot + dir * physics::BARREL_LEN;
     let charge = state.player.charging.unwrap_or(state.player.power);
     let v0 = (charge * physics::MUZZLE_V_MAX).max(1.0);
+    let wind = state.wind.current(state.t);
+    // Integrate the real ballistic model (drag + current wind) for the
+    // first 18 m — the guide must match the flight, not a vacuum parabola.
     let t_end = 18.0 / v0;
-    for i in 0..12u16 {
-        let t0 = t_end * (f32::from(i) / 12.0);
-        let t1 = t_end * ((f32::from(i) + 0.5) / 12.0);
-        let p0 = start
-            + dir * (v0 * t0)
-            + V2 {
-                x: 0.0,
-                y: -0.5 * physics::G * t0 * t0,
-            };
-        let p1 = start
-            + dir * (v0 * t1)
-            + V2 {
-                x: 0.0,
-                y: -0.5 * physics::G * t1 * t1,
-            };
-        let s0 = w2s(p0) + shake;
-        let s1 = w2s(p1) + shake;
-        draw_line(s0.x, s0.y, s1.x, s1.y, 2.0, Color::new(1.0, 1.0, 0.95, 0.4));
+    let steps = 96_u16;
+    let dt = t_end / f32::from(steps);
+    let (mut p, mut v) = (start, dir * v0);
+    let mut prev = p;
+    for i in 0..=steps {
+        if i > 0 {
+            let (np, nv) = physics::step(p, v, wind, dt);
+            prev = p;
+            p = np;
+            v = nv;
+        }
+        // One dash per half-metre of arc; dash centered on the sample.
+        if i % 8 == 0 {
+            let s0 = w2s(prev) + shake;
+            let s1 = w2s(p) + shake;
+            draw_line(s0.x, s0.y, s1.x, s1.y, 2.0, Color::new(1.0, 1.0, 0.95, 0.4));
+        }
     }
 }
 

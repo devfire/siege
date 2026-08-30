@@ -2,7 +2,7 @@
 
 use crate::ai;
 use crate::particles::Particles;
-use crate::physics::{self, BALL_R, Ball, DT, Side, V2};
+use crate::physics::{self, BALL_R, Ball, DT, Obstacle, Side, V2};
 use crate::render;
 use crate::rng::Rng;
 use crate::world::{self, Crater, Segment, SegmentKind};
@@ -269,7 +269,10 @@ impl GameState {
     fn tick_ai(&mut self, dt: f32) {
         let wind = self.wind.current(self.t);
         let target_x = world::player_pivot().x;
-        if let Some(shot) = self.ai.update(dt, self.t, wind, target_x, &mut self.rng) {
+        if let Some(shot) = self
+            .ai
+            .update(self.t, wind, target_x, &mut self.rng, &self.segments)
+        {
             let (pos, vel) =
                 physics::launch(world::defender_pivot(), shot.angle_deg, shot.charge, -1.0);
             let a = shot.angle_deg.to_radians();
@@ -297,24 +300,25 @@ impl GameState {
     fn substep(&mut self) {
         let wind = self.wind.current(self.t);
         let keep_alive = self.keep_alive();
-        let mut hits: Vec<(V2, Side)> = Vec::new();
+        let mut hits: Vec<(V2, Side, bool)> = Vec::new(); // (impact, side, ground contact)
         let mut despawn: Vec<usize> = Vec::new();
         for (i, ball) in self.balls.iter_mut().enumerate() {
+            let prev = ball.pos;
             let (np, nv) = physics::step(ball.pos, ball.vel, wind, DT);
             ball.pos = np;
             ball.vel = nv;
             if np.x < -5.0 || np.x > 205.0 {
                 despawn.push(i);
-            } else if let Some(at) = contact(ball, &self.segments, keep_alive) {
-                hits.push((at, ball.side));
+            } else if let Some((at, ground)) = contact(prev, ball, &self.segments, keep_alive) {
+                hits.push((at, ball.side, ground));
                 despawn.push(i);
             }
         }
         for &i in despawn.iter().rev() {
             self.balls.remove(i);
         }
-        for (at, side) in hits {
-            self.explode(at, side);
+        for (at, side, ground) in hits {
+            self.explode(at, side, ground);
         }
     }
 
@@ -324,7 +328,7 @@ impl GameState {
             .any(|s| s.kind == SegmentKind::Keep && s.alive())
     }
 
-    fn explode(&mut self, at: V2, side: Side) {
+    fn explode(&mut self, at: V2, side: Side, ground_contact: bool) {
         self.particles.spawn_explosion(at, &mut self.rng);
         let gh = world::ground_height(at.x);
         if at.y <= gh + BALL_R + 0.25 {
@@ -341,13 +345,31 @@ impl GameState {
             if !seg.alive() {
                 continue;
             }
-            if let Some(c) = world::hit_rect(at, AOE_R, seg.x0, seg.y0, seg.w, seg.h) {
+            if let Some(c) = physics::hit(
+                at,
+                AOE_R,
+                &Obstacle {
+                    x0: seg.x0,
+                    y0: seg.y0,
+                    w: seg.w,
+                    h: seg.h,
+                },
+            ) {
                 let dmg = SEG_DMG * (1.0 - (c - at).length() / AOE_R).max(0.0);
                 seg.hp = (seg.hp - dmg).max(0.0);
             }
         }
         let pp = world::player_pivot();
-        if let Some(c) = world::hit_rect(at, AOE_R, pp.x - 1.6, pp.y - 0.8, 3.2, 1.6) {
+        if let Some(c) = physics::hit(
+            at,
+            AOE_R,
+            &Obstacle {
+                x0: pp.x - 1.6,
+                y0: pp.y - 0.8,
+                w: 3.2,
+                h: 1.6,
+            },
+        ) {
             let dmg = CANNON_DMG * (1.0 - (c - at).length() / AOE_R).max(0.0);
             if dmg > 0.0 {
                 self.player.hp = (self.player.hp - dmg).max(0.0);
@@ -367,7 +389,7 @@ impl GameState {
         }
         self.shake += (6.0 - (at - pp).length() / 15.0).clamp(0.0, 6.0);
         if side == Side::Defender {
-            self.ai.observe(at.x, pp.x);
+            self.ai.observe(at.x, pp.x, ground_contact);
         }
         if self.phase == Phase::Playing {
             if !self.keep_alive() {
@@ -384,31 +406,66 @@ impl GameState {
 }
 
 /// First contact for a ball: ground, alive segments, rubble, cannon boxes.
-fn contact(ball: &Ball, segments: &[Segment], keep_alive: bool) -> Option<V2> {
+/// Returns `(impact, ground_contact)`. The ground crossing is linearly
+/// interpolated between `prev` and the current position, so the reported
+/// impact sits on the terrain surface instead of up to one substep past it.
+fn contact(prev: V2, ball: &Ball, segments: &[Segment], keep_alive: bool) -> Option<(V2, bool)> {
     let p = ball.pos;
     let gh = world::ground_height(p.x);
     if p.y <= gh + BALL_R {
-        return Some(V2 { x: p.x, y: gh });
+        // Interpolate where the ball's surface crossed the ground.
+        let f0 = prev.y - world::ground_height(prev.x) - BALL_R;
+        let f1 = p.y - gh - BALL_R;
+        let t = if f0 > f1 {
+            (f0 / (f0 - f1)).clamp(0.0, 1.0)
+        } else {
+            0.0
+        };
+        let x = prev.x + (p.x - prev.x) * t;
+        return Some((
+            V2 {
+                x,
+                y: world::ground_height(x),
+            },
+            true,
+        ));
     }
     for seg in segments {
-        let hit = if seg.alive() {
-            world::hit_rect(p, BALL_R, seg.x0, seg.y0, seg.w, seg.h)
+        let rect = if seg.alive() {
+            (seg.x0, seg.y0, seg.w, seg.h)
         } else {
-            let (rx, ry, rw, rh) = world::rubble_rect(seg);
-            world::hit_rect(p, BALL_R, rx, ry, rw, rh)
+            world::rubble_rect(seg)
         };
-        if hit.is_some() {
-            return hit;
+        let o = Obstacle {
+            x0: rect.0,
+            y0: rect.1,
+            w: rect.2,
+            h: rect.3,
+        };
+        if let Some(c) = physics::hit(p, BALL_R, &o) {
+            return Some((c, false));
         }
     }
     if keep_alive {
         let dp = world::defender_pivot();
-        if let Some(c) = world::hit_rect(p, BALL_R, dp.x - 0.8, dp.y - 0.6, 1.6, 1.2) {
-            return Some(c);
+        let o = Obstacle {
+            x0: dp.x - 0.8,
+            y0: dp.y - 0.6,
+            w: 1.6,
+            h: 1.2,
+        };
+        if let Some(c) = physics::hit(p, BALL_R, &o) {
+            return Some((c, false));
         }
     }
     let pp = world::player_pivot();
-    world::hit_rect(p, BALL_R, pp.x - 1.6, pp.y - 0.8, 3.2, 1.6)
+    let o = Obstacle {
+        x0: pp.x - 1.6,
+        y0: pp.y - 0.8,
+        w: 3.2,
+        h: 1.6,
+    };
+    physics::hit(p, BALL_R, &o).map(|c| (c, false))
 }
 
 /// Fresh seed from the platform clock (works native + wasm).

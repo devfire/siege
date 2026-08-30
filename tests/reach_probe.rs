@@ -8,7 +8,10 @@ fn reach_envelope() {
     for wind in [-14.0_f32, -12.0, -10.0, -8.0, -6.0, -4.0, 0.0, 8.0] {
         let mut best = (0.0_f32, f32::MIN);
         for a in (10..=160).map(|i| i as f32 * 0.5) {
-            let x = simulate_landing(muzzle, a, 1.0, 1.0, wind, &ground_height).x;
+            let x = match simulate_landing(muzzle, a, 1.0, 1.0, wind, ground_height, &[]) {
+                siege::physics::Landing::Ground(p) => p.x,
+                _ => f32::MIN,
+            };
             if x > best.1 {
                 best = (a, x);
             }
