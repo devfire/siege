@@ -10,6 +10,7 @@ use crate::rng::Rng;
 use crate::world;
 use macroquad::color::Color;
 use macroquad::shapes::{DrawRectangleParams, draw_circle, draw_line, draw_rectangle_ex};
+use std::collections::VecDeque;
 
 #[derive(Copy, Clone, PartialEq)]
 pub enum PKind {
@@ -39,7 +40,7 @@ const LEAF_CAP: usize = 14;
 const G: f32 = 9.81;
 
 pub struct Particles {
-    pool: Vec<Particle>,
+    pool: VecDeque<Particle>,
 }
 
 impl Default for Particles {
@@ -52,15 +53,17 @@ impl Particles {
     #[must_use]
     pub fn new() -> Self {
         Self {
-            pool: Vec::with_capacity(256),
+            pool: VecDeque::with_capacity(256),
         }
     }
 
+    /// Ring-buffer eviction: `pop_front` is O(1); `Vec::remove(0)` memmoved
+    /// up to 1199 particles per spawn when the pool was full.
     fn push(&mut self, p: Particle) {
         if self.pool.len() >= CAP {
-            self.pool.remove(0);
+            self.pool.pop_front();
         }
-        self.pool.push(p);
+        self.pool.push_back(p);
     }
 
     /// Muzzle blast: one flash, 10 fast sparks along the barrel, 14 smoke
@@ -247,17 +250,17 @@ impl Particles {
             match p.kind {
                 PKind::Flash => {}
                 PKind::Smoke => {
-                    p.vel = p.vel * (1.0 - 1.6 * dt).max(0.0);
+                    p.vel *= (1.0 - 1.6 * dt).max(0.0);
                     p.vel.x += (wind * 0.6 - p.vel.x) * (1.4 * dt).min(1.0);
                     p.vel.y += 1.1 * dt; // buoyancy
                     p.size += 1.1 * dt;
                 }
                 PKind::Spark => {
                     p.vel.y -= 4.0 * dt;
-                    p.vel = p.vel * (1.0 - 2.5 * dt).max(0.0);
+                    p.vel *= (1.0 - 2.5 * dt).max(0.0);
                 }
                 PKind::Dust => {
-                    p.vel = p.vel * (1.0 - 2.2 * dt).max(0.0);
+                    p.vel *= (1.0 - 2.2 * dt).max(0.0);
                     p.vel.x += (wind * 0.3 - p.vel.x) * (1.0 * dt).min(1.0);
                     p.size += 0.8 * dt;
                 }
@@ -289,7 +292,7 @@ impl Particles {
                     }
                 }
             }
-            p.pos = p.pos + p.vel * dt;
+            p.pos += p.vel * dt;
         }
         self.pool
             .retain(|p| p.life > 0.0 && p.pos.x > -8.0 && p.pos.x < 208.0 && p.pos.y < 120.0);

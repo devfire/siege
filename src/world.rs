@@ -1,7 +1,7 @@
 //! World layout — terrain, castle segments, collision primitives.
 //! Macroquad-free; layout truth for both the sim and the renderer.
 
-use crate::physics::V2;
+use crate::physics::{self, V2};
 
 /// Rolling base terrain (m above world floor y = 0).
 fn base_terrain(x: f32) -> f32 {
@@ -105,15 +105,23 @@ pub fn castle_segments() -> Vec<Segment> {
     ]
 }
 
-/// Circle (`p`, `r`) vs axis-aligned rect `(x0, y0, w, h)`; returns the
-/// contact (closest) point when they intersect.
+/// Every rect a ball can strike, in [`game`]'s contact order: live
+/// segments at full height, destroyed ones as their rubble mound. The AI
+/// planner feeds this to [`physics::simulate_landing`] so the model and
+/// the real substep share one notion of "what stops a ball".
 #[must_use]
-pub fn hit_rect(p: V2, r: f32, x0: f32, y0: f32, w: f32, h: f32) -> Option<V2> {
-    let cx = p.x.clamp(x0, x0 + w);
-    let cy = p.y.clamp(y0, y0 + h);
-    let dx = p.x - cx;
-    let dy = p.y - cy;
-    (dx * dx + dy * dy <= r * r).then_some(V2 { x: cx, y: cy })
+pub fn collidables(segments: &[Segment]) -> Vec<physics::Obstacle> {
+    segments
+        .iter()
+        .map(|seg| {
+            let (x0, y0, w, h) = if seg.alive() {
+                (seg.x0, seg.y0, seg.w, seg.h)
+            } else {
+                rubble_rect(seg)
+            };
+            physics::Obstacle { x0, y0, w, h }
+        })
+        .collect()
 }
 
 /// A destroyed segment leaves a rubble mound: the bottom 25% of its rect,
