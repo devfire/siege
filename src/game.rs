@@ -10,12 +10,16 @@ use macroquad::input::{
     KeyCode, MouseButton, is_key_down, is_key_pressed, is_mouse_button_down,
     is_mouse_button_pressed, is_mouse_button_released, mouse_position,
 };
+use std::collections::VecDeque;
 
 const AOE_R: f32 = 3.2;
 const SEG_DMG: f32 = 55.0;
 const CANNON_DMG: f32 = 60.0;
 const RELOAD: f32 = 3.5;
 const CHARGE_RATE: f32 = (1.0 - 0.18) / 1.1; // 0.18 → 1.0 in 1.1 s
+const CRATER_CAP: usize = 24;
+const MARKER_CAP: usize = 6;
+const RANGE_CAP: usize = 3;
 const SHAKE_TAU: f32 = 0.35;
 const WIND_SLOW_W: f32 = 0.03; // wind regime swing, rad/s (~3.5 min period)
 const WIND_FAST_W: f32 = 0.07; // gust wobble, rad/s (~90 s period)
@@ -74,11 +78,11 @@ pub struct GameState {
     pub balls: Vec<Ball>,
     pub particles: Particles,
     pub segments: Vec<Segment>,
-    pub craters: Vec<Crater>,
+    pub craters: VecDeque<Crater>,
     pub wind: Wind,
     pub shake: f32,
-    pub markers: Vec<(V2, Side)>, // impact flags, cap 6, newest kept
-    pub last_ranges: Vec<f32>,    // player's last 3 shot ranges in m
+    pub markers: VecDeque<(V2, Side)>, // impact flags, cap 6, newest kept
+    pub last_ranges: VecDeque<f32>,    // player's last 3 shot ranges in m
     /// Red vignette flash after the player takes damage (1 → 0).
     pub hurt: f32,
     /// Real seconds since Victory/Defeat began (overlay appears after `END_HOLD`).
@@ -115,11 +119,11 @@ impl GameState {
             balls: Vec::new(),
             particles: Particles::new(),
             segments: world::castle_segments(),
-            craters: Vec::new(),
+            craters: VecDeque::new(),
             wind,
             shake: 0.0,
-            markers: Vec::new(),
-            last_ranges: Vec::new(),
+            markers: VecDeque::new(),
+            last_ranges: VecDeque::new(),
             hurt: 0.0,
             end_t: 0.0,
             sim_acc: 0.0,
@@ -174,6 +178,11 @@ impl GameState {
                 }
                 if is_key_pressed(KeyCode::R) {
                     self.restart();
+                }
+                // Release during pause cancels the in-progress charge; letting it
+                // linger would soft-lock the Space fire shortcut after unpause.
+                if is_mouse_button_released(MouseButton::Left) {
+                    self.player.charging = None;
                 }
             }
             Phase::Playing => {
@@ -252,7 +261,7 @@ impl GameState {
             pos,
             vel,
             side: Side::Player,
-            trail: Vec::new(),
+            trail: VecDeque::new(),
         });
         self.player.reload = RELOAD;
     }
@@ -275,7 +284,7 @@ impl GameState {
                 pos,
                 vel,
                 side: Side::Defender,
-                trail: Vec::new(),
+                trail: VecDeque::new(),
             });
             self.defender.reload_anim = 1.0;
         }
@@ -315,18 +324,17 @@ impl GameState {
             .any(|s| s.kind == SegmentKind::Keep && s.alive())
     }
 
-    /// Ball detonates at first contact: `AoE` damage, particles, scar, marker.
     fn explode(&mut self, at: V2, side: Side) {
         self.particles.spawn_explosion(at, &mut self.rng);
         let gh = world::ground_height(at.x);
         if at.y <= gh + BALL_R + 0.25 {
-            self.craters.push(Crater {
+            if self.craters.len() >= CRATER_CAP {
+                self.craters.pop_front();
+            }
+            self.craters.push_back(Crater {
                 x: at.x,
                 r: self.rng.range(0.8, 1.4),
             });
-            if self.craters.len() > 24 {
-                self.craters.remove(0);
-            }
             self.particles.spawn_dust(at);
         }
         for seg in &mut self.segments {
@@ -346,16 +354,16 @@ impl GameState {
                 self.hurt = 1.0;
             }
         }
-        self.markers.push((at, side));
-        if self.markers.len() > 6 {
-            self.markers.remove(0);
+        if self.markers.len() >= MARKER_CAP {
+            self.markers.pop_front();
         }
+        self.markers.push_back((at, side));
         if side == Side::Player {
             let range = (at.x - pp.x).abs();
-            self.last_ranges.push(range);
-            if self.last_ranges.len() > 3 {
-                self.last_ranges.remove(0);
+            if self.last_ranges.len() >= RANGE_CAP {
+                self.last_ranges.pop_front();
             }
+            self.last_ranges.push_back(range);
         }
         self.shake += (6.0 - (at - pp).length() / 15.0).clamp(0.0, 6.0);
         if side == Side::Defender {

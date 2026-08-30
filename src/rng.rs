@@ -37,10 +37,15 @@ impl Rng {
     }
 
     /// Uniform in `[0, 1)`.
+    ///
+    /// Uses the top 24 bits directly. Multiplying a full 32-bit integer by
+    /// `2^-32` in `f32` can round `u32::MAX`-scale values up to exactly `1.0`
+    /// (24-bit mantissa), violating the half-open contract; a 24-bit
+    /// numerator capped at `16_777_215 / 16_777_216` cannot.
     #[must_use]
     #[allow(clippy::cast_precision_loss)] // 2^24 mantissa quantization is fine here
     pub fn f01(&mut self) -> f32 {
-        (self.next_u32() as f32) * (1.0 / 4_294_967_296.0)
+        (self.next_u32() >> 8) as f32 * (1.0 / 16_777_216.0)
     }
 
     /// Uniform in `[a, b)`.
@@ -55,5 +60,28 @@ impl Rng {
         let u1 = self.f01().max(1e-9);
         let u2 = self.f01();
         (-2.0 * u1.ln()).sqrt() * (std::f32::consts::TAU * u2).cos()
+    }
+}
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// `(u32::MAX as f32) * 2^-32` rounds up to exactly 1.0 in f32; the
+    /// 24-bit path must keep the worst-case output strictly below 1.0.
+    #[test]
+    #[allow(clippy::cast_precision_loss, clippy::float_cmp)] // exact boundary values are the point
+    fn f01_boundary_is_below_one() {
+        assert_eq!((u32::MAX as f32) * (1.0 / 4_294_967_296.0), 1.0);
+        let worst = (u32::MAX >> 8) as f32 * (1.0 / 16_777_216.0);
+        assert!(worst < 1.0, "worst-case f01 = {worst}");
+    }
+
+    #[test]
+    fn f01_stays_in_half_open_range() {
+        let mut rng = Rng::seed(0x00C0_FFEE);
+        for _ in 0..100_000 {
+            let v = rng.f01();
+            assert!((0.0..1.0).contains(&v), "f01 out of [0, 1): {v}");
+        }
     }
 }

@@ -4,7 +4,8 @@
 //! rendering layer. Ballistics: gravity plus quadratic air drag acting on the
 //! wind-relative velocity.
 
-use std::ops::{Add, Mul, Neg, Sub};
+use std::collections::VecDeque;
+use std::ops::{Add, AddAssign, Mul, MulAssign, Sub, SubAssign};
 
 #[derive(Copy, Clone, Default, Debug, PartialEq)]
 pub struct V2 {
@@ -30,13 +31,28 @@ impl V2 {
             V2::default()
         }
     }
+}
 
-    #[must_use]
-    pub fn dot(self, o: V2) -> f32 {
-        self.x * o.x + self.y * o.y
+impl AddAssign for V2 {
+    fn add_assign(&mut self, o: V2) {
+        self.x += o.x;
+        self.y += o.y;
     }
 }
 
+impl SubAssign for V2 {
+    fn sub_assign(&mut self, o: V2) {
+        self.x -= o.x;
+        self.y -= o.y;
+    }
+}
+
+impl MulAssign<f32> for V2 {
+    fn mul_assign(&mut self, s: f32) {
+        self.x *= s;
+        self.y *= s;
+    }
+}
 impl Add for V2 {
     type Output = V2;
     fn add(self, o: V2) -> V2 {
@@ -63,16 +79,6 @@ impl Mul<f32> for V2 {
         V2 {
             x: self.x * s,
             y: self.y * s,
-        }
-    }
-}
-
-impl Neg for V2 {
-    type Output = V2;
-    fn neg(self) -> V2 {
-        V2 {
-            x: -self.x,
-            y: -self.y,
         }
     }
 }
@@ -141,16 +147,17 @@ pub struct Ball {
     pub pos: V2,
     pub vel: V2,
     pub side: Side,
-    pub trail: Vec<V2>,
+    pub trail: VecDeque<V2>,
 }
 
 impl Ball {
-    /// Record a trail point, dropping the oldest beyond `TRAIL_CAP`.
+    /// Ring-buffer record: `pop_front` is O(1); `Vec::remove(0)` was an
+    /// O(N) memmove on every step once the cap was reached.
     pub fn push_trail(&mut self, p: V2) {
-        self.trail.push(p);
-        if self.trail.len() > TRAIL_CAP {
-            self.trail.remove(0);
+        if self.trail.len() >= TRAIL_CAP {
+            self.trail.pop_front();
         }
+        self.trail.push_back(p);
     }
 }
 
