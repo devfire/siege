@@ -14,7 +14,7 @@ use crate::world;
 use crate::world::SegmentKind;
 use macroquad::color::Color;
 use macroquad::math::Vec2;
-use macroquad::shapes::{draw_line, draw_rectangle, draw_triangle};
+use macroquad::shapes::{draw_circle, draw_ellipse, draw_line, draw_rectangle, draw_triangle};
 
 const MORTAR: Color = Color::from_hex(0x6E_67_5F);
 const KEEP_C: Color = Color::from_hex(0x94_90_8B);
@@ -64,9 +64,16 @@ pub(super) fn draw_castle(state: &GameState, shake: Vec2) {
                     draw_crenellations(seg.x0, seg.y0 + seg.h, seg.w, &w);
                 }
                 if seg.kind == SegmentKind::Keep {
+                    draw_keep_windows(seg.x0, seg.y0, seg.w, seg.h, state.t, &w);
                     draw_keep_roof(state, seg.x0, seg.w, seg.y0 + seg.h, &w);
                 } else {
                     draw_arrow_slits(seg.x0, seg.y0, seg.w, seg.h, seed, &w);
+                }
+                if seg.kind == SegmentKind::Tower {
+                    draw_pennant(seg.x0 + seg.w * 0.5, seg.y0 + seg.h, state.t, seed, &w);
+                }
+                if seg.kind == SegmentKind::Gate {
+                    draw_gate_torches(seg.x0, seg.y0, seg.w, seg.h, state.t, seed, &w);
                 }
                 if frac < 0.66 {
                     draw_crack(seg.x0, seg.y0, seg.w, seg.h, seed, 1, &w);
@@ -188,6 +195,129 @@ fn draw_arrow_slits(x0: f32, y0: f32, width: f32, height: f32, seed: u32, w: &dy
             1.7 * s,
             Color::new(0.08, 0.07, 0.09, 0.8),
         );
+    }
+}
+
+/// Two lit arched windows on the keep body plus a round loft window,
+/// with warm candle flicker from `t`.
+fn draw_keep_windows(x0: f32, y0: f32, width: f32, height: f32, t: f32, w: &dyn Fn(V2) -> Vec2) {
+    let s = scale();
+    let cx = x0 + width * 0.5;
+    let frame = Color::new(0.14, 0.12, 0.1, 1.0);
+    let arched = |wx: f32, wy: f32, k: f32| {
+        let flick = 0.72 + 0.28 * (t * 6.0 + k * 2.1).sin();
+        let glow = Color::new(1.0, 0.7, 0.32, 0.35 + 0.4 * flick);
+        let tl = w(V2 {
+            x: wx - 0.5,
+            y: wy + 1.8,
+        });
+        draw_rectangle(tl.x, tl.y, 1.0 * s, 1.8 * s, frame);
+        let arch = w(V2 { x: wx, y: wy + 1.8 });
+        draw_circle(arch.x, arch.y, 0.5 * s, frame);
+        let tl = w(V2 {
+            x: wx - 0.32,
+            y: wy + 1.55,
+        });
+        draw_rectangle(tl.x, tl.y, 0.64 * s, 1.35 * s, glow);
+        let arch = w(V2 {
+            x: wx,
+            y: wy + 1.55,
+        });
+        draw_circle(arch.x, arch.y, 0.32 * s, glow);
+    };
+    arched(cx - 3.2, y0 + height * 0.35, 1.0);
+    arched(cx + 3.2, y0 + height * 0.35, 2.0);
+    let flick = 0.7 + 0.3 * (t * 5.0).sin();
+    let c = w(V2 {
+        x: cx,
+        y: y0 + height * 0.78,
+    });
+    draw_circle(c.x, c.y, 0.45 * s, frame);
+    draw_circle(
+        c.x,
+        c.y,
+        0.28 * s,
+        Color::new(1.0, 0.7, 0.32, 0.3 + 0.4 * flick),
+    );
+}
+
+/// Slim waving pennant on an iron pole above a tower's merlon line.
+fn draw_pennant(cx: f32, top: f32, t: f32, seed: u32, w: &dyn Fn(V2) -> Vec2) {
+    let s = scale();
+    let base = w(V2 {
+        x: cx,
+        y: top + 0.9,
+    });
+    let tip = w(V2 {
+        x: cx,
+        y: top + 3.6,
+    });
+    draw_line(base.x, base.y, tip.x, tip.y, (0.07 * s).max(1.5), IRON);
+    let flutter = (t * 4.2 + seed as f32).sin();
+    let f0 = w(V2 {
+        x: cx,
+        y: top + 3.5,
+    });
+    let f1 = w(V2 {
+        x: cx,
+        y: top + 3.5 - 0.85,
+    });
+    let f2 = w(V2 {
+        x: cx + 1.7 + flutter * 0.25,
+        y: top + 3.5 - 0.42 + flutter * 0.18,
+    });
+    draw_triangle(f0, f1, f2, BANNER);
+}
+
+/// Braziers flanking the gate: pole, basket, layered flame, warm halo on
+/// the wall behind.
+fn draw_gate_torches(
+    x0: f32,
+    y0: f32,
+    width: f32,
+    height: f32,
+    t: f32,
+    seed: u32,
+    w: &dyn Fn(V2) -> Vec2,
+) {
+    let s = scale();
+    for k in 0..2u32 {
+        let tx = if k == 0 { x0 + 0.5 } else { x0 + width - 0.5 };
+        let ty = y0 + height * 0.72;
+        let pole = w(V2 { x: tx, y: ty });
+        let ground = w(V2 { x: tx, y: ty - 2.2 });
+        draw_line(
+            ground.x,
+            ground.y,
+            pole.x,
+            pole.y,
+            (0.08 * s).max(1.5),
+            darken(WOOD, 0.2),
+        );
+        let flick = 0.65 + 0.35 * (t * (9.0 + 3.0 * hash2(seed, k))).sin();
+        draw_circle(
+            pole.x,
+            pole.y - 0.1 * s,
+            (1.3 + 0.3 * flick) * s,
+            Color::new(1.0, 0.6, 0.25, 0.1),
+        );
+        draw_ellipse(
+            pole.x,
+            pole.y - 0.25 * s,
+            0.16 * s,
+            (0.3 + 0.12 * flick) * s,
+            0.0,
+            Color::new(0.92, 0.38, 0.1, 0.9),
+        );
+        draw_ellipse(
+            pole.x,
+            pole.y - 0.2 * s,
+            0.09 * s,
+            (0.18 + 0.08 * flick) * s,
+            0.0,
+            Color::new(1.0, 0.82, 0.38, 0.95),
+        );
+        draw_rectangle(pole.x - 0.18 * s, pole.y, 0.36 * s, 0.22 * s, IRON);
     }
 }
 

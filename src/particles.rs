@@ -115,6 +115,36 @@ impl Particles {
         }
     }
 
+    /// Touch-hole prime puff: fat smoke wisps and popping embers while a
+    /// fuse burns. Called at ~30 Hz; `k` (0 → 1) is the burn progress —
+    /// the closer to firing, the angrier the vent.
+    pub fn spawn_prime_puff(&mut self, at: V2, k: f32) {
+        self.push(Particle {
+            pos: at,
+            vel: V2 { x: 0.15, y: 1.6 },
+            life: 0.6,
+            max_life: 0.6,
+            size: 0.24 + 0.2 * k,
+            spin: 0.0,
+            kind: PKind::Smoke,
+        });
+        for i in 0..2u8 {
+            let side = if i == 0 { 1.0 } else { -1.0 };
+            self.push(Particle {
+                pos: at,
+                vel: V2 {
+                    x: side * (0.6 + k),
+                    y: 2.0 + 1.2 * k,
+                },
+                life: 0.2,
+                max_life: 0.2,
+                size: 0.12,
+                spin: 0.0,
+                kind: PKind::Spark,
+            });
+        }
+    }
+
     /// Impact kit: flash, 16 tumbling debris, 22 smoke, 12 sparks, and a
     /// ground-hugging dust ring.
     pub fn spawn_explosion(&mut self, at: V2, rng: &mut Rng) {

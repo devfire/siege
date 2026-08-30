@@ -108,8 +108,10 @@ pub fn draw(state: &GameState, font: Option<&macroquad::text::Font>) {
     draw_sun(shake * 0.1);
     draw_clouds(state, shake);
     draw_mountains(shake);
+    draw_birds(state, shake);
     draw_ground(state, shake);
     draw_castle(state, shake);
+    actors::draw(state, shake);
     draw_cannons(state, shake);
     draw_markers(state, shake);
     draw_balls(state, shake);
@@ -125,13 +127,14 @@ pub fn draw(state: &GameState, font: Option<&macroquad::text::Font>) {
     draw_ui(state, font);
 }
 
+mod actors;
 mod castle;
 mod hud;
 mod scenery;
 
 use castle::draw_castle;
 use hud::draw_ui;
-use scenery::{draw_clouds, draw_ground, draw_mountains, draw_sky, draw_sun};
+use scenery::{draw_birds, draw_clouds, draw_ground, draw_mountains, draw_sky, draw_sun};
 
 fn draw_cannons(state: &GameState, shake: Vec2) {
     let s = scale();
@@ -191,8 +194,14 @@ fn draw_player_cannon(state: &GameState, w: &dyn Fn(V2) -> Vec2, s: f32) {
         );
     }
     draw_circle(wheel.x, wheel.y, 0.16 * s, darken(WHEEL_C, 0.4));
-    // Barrel.
-    let pps = w(pp);
+    // Barrel, kicked back along its axis while `recoil` decays.
+    let a = state.player.angle_deg.to_radians();
+    let dir = V2 {
+        x: a.cos(),
+        y: a.sin(),
+    };
+    let bp = pp - dir * (state.player.recoil * 0.38);
+    let pps = w(bp);
     draw_rectangle_ex(
         pps.x,
         pps.y,
@@ -200,18 +209,49 @@ fn draw_player_cannon(state: &GameState, w: &dyn Fn(V2) -> Vec2, s: f32) {
         0.52 * s,
         DrawRectangleParams {
             offset: vec2(0.0, 0.5),
-            rotation: -state.player.angle_deg.to_radians(),
+            rotation: -a,
             color: reload_tint,
         },
     );
     // Muzzle band.
-    let a = state.player.angle_deg.to_radians();
-    let muzzle = w(pp
-        + V2 {
-            x: a.cos() * 2.75,
-            y: a.sin() * 2.75,
-        });
+    let muzzle = w(bp + dir * 2.75);
     draw_circle(muzzle.x, muzzle.y, 0.3 * s, darken(IRON, 0.3));
+    // Touch-hole fire while the fuse burns: a swelling three-layer glow
+    // that ramps up as the shot nears.
+    if state.player.fuse > 0.0 {
+        fuse_glow(
+            w,
+            s,
+            bp + V2 { x: 0.0, y: 0.42 },
+            state.player.fuse_progress(),
+            state.t,
+        );
+    }
+}
+
+/// Swelling three-layer touch-hole fire: wide warm halo, molten core,
+/// white-hot center. `k` (0 → 1) is the fuse burn progress.
+fn fuse_glow(w: &dyn Fn(V2) -> Vec2, s: f32, at: V2, burn: f32, now: f32) {
+    let e = w(at);
+    let flick = 0.5 + 0.5 * (now * 30.0).sin();
+    draw_circle(
+        e.x,
+        e.y,
+        (0.55 + 0.55 * burn + 0.1 * flick) * s,
+        Color::new(1.0, 0.45, 0.12, 0.16 + 0.16 * burn),
+    );
+    draw_circle(
+        e.x,
+        e.y,
+        (0.2 + 0.16 * burn + 0.05 * flick) * s,
+        Color::new(1.0, 0.6, 0.2, 0.95),
+    );
+    draw_circle(
+        e.x,
+        e.y,
+        (0.09 + 0.06 * burn) * s,
+        Color::new(1.0, 0.95, 0.7, 0.95),
+    );
 }
 
 /// Defender cannon on the keep roof with its crew silhouettes.
@@ -233,22 +273,45 @@ fn draw_defender_cannon(state: &GameState, w: &dyn Fn(V2) -> Vec2, s: f32) {
         0.5 * s,
         CARRIAGE,
     );
+    // Barrel, kicked back along its muzzle axis while `recoil` decays.
+    let a = state.defender.display_angle.to_radians();
+    let mdir = V2 {
+        x: -a.cos(),
+        y: a.sin(),
+    };
+    let bp = world::defender_pivot() - mdir * (state.defender.recoil * 0.3);
+    let bps = w(bp);
     draw_rectangle_ex(
-        dp.x,
-        dp.y,
+        bps.x,
+        bps.y,
         2.2 * s,
         0.4 * s,
         DrawRectangleParams {
             offset: vec2(0.0, 0.5),
-            rotation: std::f32::consts::PI + state.defender.display_angle.to_radians(),
+            rotation: std::f32::consts::PI + a,
             color: dcol,
         },
     );
-    // Crew silhouettes.
+    // Touch-hole fire while the fuse burns (the keep-side telegraph).
+    if state.defender.fuse > 0.0 {
+        fuse_glow(
+            w,
+            s,
+            bp + V2 { x: 0.0, y: 0.35 },
+            state.defender.fuse_progress(),
+            state.t,
+        );
+    }
+    // Crew silhouettes, bobbing while they reload.
+    let bob = if state.defender.reload_anim > 0.0 {
+        (state.t * 10.0).sin() * 0.05
+    } else {
+        0.0
+    };
     for (dx, hh) in [(1.5_f32, 0.75_f32), (2.3, 0.65)] {
         let cp = w(V2 {
             x: world::DEFENDER_PIVOT_X + dx,
-            y: world::KEEP_TOP + hh,
+            y: world::KEEP_TOP + hh + bob,
         });
         draw_circle(
             cp.x,
@@ -270,6 +333,23 @@ fn draw_defender_cannon(state: &GameState, w: &dyn Fn(V2) -> Vec2, s: f32) {
 fn draw_balls(state: &GameState, shake: Vec2) {
     let s = scale();
     for b in &state.balls {
+        // Grounding shadow, fading with altitude.
+        let gy = world::ground_height(b.pos.x);
+        let sa = (1.0 - (b.pos.y - gy) / 45.0).clamp(0.0, 1.0) * 0.22;
+        if sa > 0.01 {
+            let gp = w2s(V2 {
+                x: b.pos.x,
+                y: gy + 0.05,
+            }) + shake;
+            draw_ellipse(
+                gp.x,
+                gp.y,
+                (BALL_R * s * 1.1).max(4.0),
+                (BALL_R * s * 0.4).max(1.6),
+                0.0,
+                Color::new(0.1, 0.08, 0.06, sa),
+            );
+        }
         for (i, tp) in b.trail.iter().enumerate() {
             let f = (i + 1) as f32 / b.trail.len().max(1) as f32;
             let v = w2s(*tp) + shake;

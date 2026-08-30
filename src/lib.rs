@@ -1,4 +1,5 @@
 pub mod ai;
+pub mod audio;
 pub mod game;
 pub mod particles;
 pub mod physics;
@@ -13,10 +14,11 @@ pub async fn run() {
         "../assets/MedievalSharp-Regular.ttf"
     ))
     .ok();
+    let mut audio = audio::Audio::new().await;
     let mut state = game::GameState::new(rng::Rng::seed(1));
     loop {
         let dt = macroquad::time::get_frame_time().min(0.05);
-        state.update(dt);
+        state.update(dt, &mut audio);
         render::draw(&state, font.as_ref());
         macroquad::window::next_frame().await;
     }

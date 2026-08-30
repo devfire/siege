@@ -1,6 +1,7 @@
 //! Real-time duel: input, ball substeps, `AoE` damage, phases.
 
 use crate::ai;
+use crate::audio::Audio;
 use crate::particles::Particles;
 use crate::physics::{self, BALL_R, Ball, DT, Obstacle, Side, V2};
 use crate::render;
@@ -15,6 +16,10 @@ const AOE_R: f32 = 3.2;
 const SEG_DMG: f32 = 10.0;
 const CANNON_DMG: f32 = 60.0;
 const RELOAD: f32 = 1.0;
+/// Fuse burn (s) between trigger and shot — the player's is snappy, the
+/// defender's a readable telegraph. Puffs + hiss while it burns.
+const PRIME_PLAYER: f32 = 0.32;
+const PRIME_DEFENDER: f32 = 0.55;
 const CHARGE_STEP: f32 = 0.05; // per wheel notch
 const CRATER_CAP: usize = 24;
 const MARKER_CAP: usize = 6;
@@ -128,11 +133,20 @@ pub struct PlayerCannon {
     pub charge: f32,
     pub hp: f32,
     pub reload: f32,
+    /// Burning touch-hole fuse countdown (s); 0 = idle.
+    pub fuse: f32,
+    /// Recoil kick, 1 → 0.
+    pub recoil: f32,
 }
 
 pub struct DefenderCannon {
     pub display_angle: f32,
     pub reload_anim: f32,
+    /// Recoil kick, 1 → 0.
+    pub recoil: f32,
+    /// Burning-fuse countdown and the shot held until it burns out.
+    pub fuse: f32,
+    pub pending: Option<ai::Shot>,
 }
 
 pub struct GameState {
@@ -158,6 +172,22 @@ pub struct GameState {
     sim_acc: f32,
 }
 
+impl PlayerCannon {
+    /// 0 → 1 as the fuse burns down; drives the swelling touch-hole glow.
+    #[must_use]
+    pub fn fuse_progress(&self) -> f32 {
+        (1.0 - self.fuse / PRIME_PLAYER).clamp(0.0, 1.0)
+    }
+}
+
+impl DefenderCannon {
+    /// 0 → 1 as the fuse burns down; drives the swelling touch-hole glow.
+    #[must_use]
+    pub fn fuse_progress(&self) -> f32 {
+        (1.0 - self.fuse / PRIME_DEFENDER).clamp(0.0, 1.0)
+    }
+}
+
 impl GameState {
     #[must_use]
     pub fn new(mut rng: Rng) -> Self {
@@ -173,10 +203,15 @@ impl GameState {
                 charge: 0.58,
                 hp: 100.0,
                 reload: 0.0,
+                fuse: 0.0,
+                recoil: 0.0,
             },
             defender: DefenderCannon {
                 display_angle: 41.0,
                 reload_anim: 0.0,
+                recoil: 0.0,
+                fuse: 0.0,
+                pending: None,
             },
             ai: ai::DefenderAi::new(),
             balls: Vec::new(),
@@ -198,20 +233,24 @@ impl GameState {
     }
 
     /// Advance the duel by `dt_real` (unscaled wall-clock seconds).
-    pub fn update(&mut self, dt_real: f32) {
-        self.handle_input();
+    pub fn update(&mut self, dt_real: f32, audio: &mut Audio) {
+        audio.set_wind(self.wind.current());
+        self.handle_input(audio);
         if matches!(self.phase, Phase::Playing | Phase::Victory | Phase::Defeat) {
             let dt = dt_real * self.timescale;
             self.t += dt;
             self.player.reload = (self.player.reload - dt).max(0.0);
             self.defender.reload_anim = (self.defender.reload_anim - dt).max(0.0);
+            self.player.recoil = (self.player.recoil - 3.0 * dt).max(0.0);
+            self.defender.recoil = (self.defender.recoil - 3.0 * dt).max(0.0);
             self.hurt = (self.hurt - 2.5 * dt).max(0.0);
+            self.tick_fuses(dt, audio);
             if self.phase == Phase::Playing {
-                self.tick_ai(dt);
+                self.tick_ai(dt, audio);
             }
             self.sim_acc += dt.min(0.05);
             while self.sim_acc >= DT {
-                self.substep();
+                self.substep(audio);
                 self.sim_acc -= DT;
             }
             for ball in &mut self.balls {
@@ -227,7 +266,7 @@ impl GameState {
         }
     }
 
-    fn handle_input(&mut self) {
+    fn handle_input(&mut self, audio: &Audio) {
         let clicked = is_mouse_button_pressed(MouseButton::Left);
         match self.phase {
             Phase::Menu => {
@@ -265,10 +304,10 @@ impl GameState {
                         (self.player.charge + wheel_y.signum() * CHARGE_STEP).clamp(0.18, 1.0);
                 }
                 if clicked {
-                    self.fire_player();
+                    self.fire_player(audio);
                 }
                 if is_key_pressed(KeyCode::Space) {
-                    self.fire_player();
+                    self.fire_player(audio);
                 }
             }
             Phase::Victory | Phase::Defeat => {
@@ -283,10 +322,18 @@ impl GameState {
         }
     }
 
-    fn fire_player(&mut self) {
-        if self.phase != Phase::Playing || self.player.reload > 0.0 {
+    /// Trigger: light the touch-hole fuse. The shot leaves in
+    /// [`Self::tick_fuses`] when the fuse burns out; the aim keeps
+    /// tracking the cursor while it burns.
+    fn fire_player(&mut self, audio: &Audio) {
+        if self.phase != Phase::Playing || self.player.reload > 0.0 || self.player.fuse > 0.0 {
             return;
         }
+        self.player.fuse = PRIME_PLAYER;
+        audio.fuse(true);
+    }
+
+    fn launch_player(&mut self, audio: &Audio) {
         let pivot = world::player_pivot();
         let (pos, vel) = physics::launch(pivot, self.player.angle_deg, self.player.charge, 1.0);
         let a = self.player.angle_deg.to_radians();
@@ -304,40 +351,82 @@ impl GameState {
             trail: VecDeque::new(),
         });
         self.player.reload = RELOAD;
+        self.player.recoil = 1.0;
+        audio.boom_near();
     }
 
-    fn tick_ai(&mut self, dt: f32) {
+    /// Burning fuses: touch-hole puffs while they burn, the launch when a
+    /// fuse expires. Ticks in every simulating phase, so a shot lit before
+    /// Victory/Defeat still leaves the barrel in the end slow-mo.
+    fn tick_fuses(&mut self, dt: f32, audio: &Audio) {
+        if self.player.fuse > 0.0 {
+            let hole = world::player_pivot() + V2 { x: 0.0, y: 0.45 };
+            if self.rng.f01() < dt * 30.0 {
+                self.particles
+                    .spawn_prime_puff(hole, self.player.fuse_progress());
+            }
+            self.player.fuse -= dt;
+            if self.player.fuse <= 0.0 {
+                self.launch_player(audio);
+            }
+        }
+        if self.defender.pending.is_some() {
+            let hole = world::defender_pivot() + V2 { x: 0.0, y: 0.45 };
+            if self.rng.f01() < dt * 30.0 {
+                self.particles
+                    .spawn_prime_puff(hole, self.defender.fuse_progress());
+            }
+            self.defender.fuse -= dt;
+            if self.defender.fuse <= 0.0 {
+                if let Some(shot) = self.defender.pending.take() {
+                    self.launch_defender(shot.angle_deg, shot.charge, audio);
+                }
+            }
+        }
+    }
+
+    fn tick_ai(&mut self, dt: f32, audio: &Audio) {
         let wind = self.wind.current();
         let target_x = world::player_pivot().x;
         if let Some(shot) = self
             .ai
             .update(self.t, wind, target_x, &mut self.rng, &self.segments)
         {
-            let (pos, vel) =
-                physics::launch(world::defender_pivot(), shot.angle_deg, shot.charge, -1.0);
-            let a = shot.angle_deg.to_radians();
-            self.particles.spawn_muzzle(
-                pos,
-                V2 {
-                    x: -a.cos(),
-                    y: a.sin(),
-                },
-            );
-            self.balls.push(Ball {
-                pos,
-                vel,
-                side: Side::Defender,
-                trail: VecDeque::new(),
-            });
-            self.defender.reload_anim = 1.0;
+            // Telegraph: hold the shot on a burning fuse before it leaves.
+            self.defender.pending = Some(shot);
+            self.defender.fuse = PRIME_DEFENDER;
+            audio.fuse(false);
         }
-        // Barrel eases toward the current AI aim.
+        // Barrel eases toward the pending shot while telegraphing, else
+        // toward the live AI aim.
         let (aim, _) = self.ai.current_aim();
+        let target = self.defender.pending.as_ref().map_or(aim, |s| s.angle_deg);
         self.defender.display_angle +=
-            (aim - self.defender.display_angle) * (dt * 4.0).clamp(0.0, 1.0);
+            (target - self.defender.display_angle) * (dt * 6.0).clamp(0.0, 1.0);
     }
 
-    fn substep(&mut self) {
+    fn launch_defender(&mut self, angle_deg: f32, charge: f32, audio: &Audio) {
+        let (pos, vel) = physics::launch(world::defender_pivot(), angle_deg, charge, -1.0);
+        let a = angle_deg.to_radians();
+        self.particles.spawn_muzzle(
+            pos,
+            V2 {
+                x: -a.cos(),
+                y: a.sin(),
+            },
+        );
+        self.balls.push(Ball {
+            pos,
+            vel,
+            side: Side::Defender,
+            trail: VecDeque::new(),
+        });
+        self.defender.reload_anim = 1.0;
+        self.defender.recoil = 1.0;
+        audio.boom_far();
+    }
+
+    fn substep(&mut self, audio: &Audio) {
         // Wind evolves every substep, so a ball in flight meets changing gusts.
         self.wind.step(DT, &mut self.rng);
         let wind = self.wind.current();
@@ -360,7 +449,7 @@ impl GameState {
             self.balls.remove(i);
         }
         for (at, side, ground) in hits {
-            self.explode(at, side, ground);
+            self.explode(at, side, ground, audio);
         }
     }
 
@@ -370,8 +459,11 @@ impl GameState {
             .any(|s| s.kind == SegmentKind::Keep && s.alive())
     }
 
-    fn explode(&mut self, at: V2, side: Side, ground_contact: bool) {
+    fn explode(&mut self, at: V2, side: Side, ground_contact: bool, audio: &Audio) {
         self.particles.spawn_explosion(at, &mut self.rng);
+        let pp = world::player_pivot();
+        let near = (1.0 - (at.x - pp.x).abs() / 200.0).clamp(0.0, 1.0);
+        audio.impact(near);
         let gh = world::ground_height(at.x);
         if at.y <= gh + BALL_R + 0.25 {
             if self.craters.len() >= CRATER_CAP {
@@ -383,6 +475,7 @@ impl GameState {
             });
             self.particles.spawn_dust(at);
         }
+        let mut fell = false;
         for seg in &mut self.segments {
             if !seg.alive() {
                 continue;
@@ -399,9 +492,14 @@ impl GameState {
             ) {
                 let dmg = SEG_DMG * (1.0 - (c - at).length() / AOE_R).max(0.0);
                 seg.hp = (seg.hp - dmg).max(0.0);
+                if seg.hp <= 0.0 {
+                    fell = true;
+                }
             }
         }
-        let pp = world::player_pivot();
+        if fell {
+            audio.crumble(near);
+        }
         if let Some(c) = physics::hit(
             at,
             AOE_R,
@@ -438,10 +536,12 @@ impl GameState {
                 self.phase = Phase::Victory;
                 self.timescale = END_SLOWMO;
                 self.end_t = 0.0;
+                audio.victory();
             } else if self.player.hp <= 0.0 {
                 self.phase = Phase::Defeat;
                 self.timescale = END_SLOWMO;
                 self.end_t = 0.0;
+                audio.defeat();
             }
         }
     }

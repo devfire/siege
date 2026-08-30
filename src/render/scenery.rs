@@ -187,6 +187,27 @@ pub(super) fn draw_mountains(shake: Vec2) {
     }
 }
 
+/// Distant birds: flapping chevrons drifting across the sky on the wind.
+pub(super) fn draw_birds(state: &GameState, shake: Vec2) {
+    let s = scale();
+    let off = shake * 0.15;
+    let ink = Color::new(0.13, 0.11, 0.16, 0.75);
+    for i in 0..4u32 {
+        let h1 = hash2(i + 41, 3);
+        let h2 = hash2(i + 7, 19);
+        // Integrated drift (never `wind * t`), same rule as the clouds.
+        let drift = state.t * (1.4 + 1.6 * h1) + state.wind.travel() * 0.4 + h2 * 240.0;
+        let x = drift.rem_euclid(240.0) - 20.0;
+        let y = 58.0 + h1 * 28.0;
+        let flap = (state.t * (5.0 + 3.0 * h2) + h1 * std::f32::consts::TAU).sin();
+        let p = w2s(V2 { x, y }) + off;
+        let span = (0.5 + 0.3 * h2) * s;
+        let lift = flap * 0.45 * span;
+        draw_line(p.x - span, p.y - lift, p.x, p.y, 1.5, ink);
+        draw_line(p.x, p.y, p.x + span, p.y - lift, 1.5, ink);
+    }
+}
+
 pub(super) fn draw_ground(state: &GameState, shake: Vec2) {
     let sc = scale();
     let off = shake; // world layer: full shake
