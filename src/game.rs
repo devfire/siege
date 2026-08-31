@@ -1,16 +1,15 @@
-//! Real-time duel: input, ball substeps, `AoE` damage, phases.
+//! Real-time duel: frame-input commands, ball substeps, `AoE` damage,
+//! phases. Macroquad-free — the platform layer (`lib.rs`) polls hardware
+//! into [`FrameInput`] and owns the clock-seed policy, so the sim can run
+//! headless (tests, AI training).
 
 use crate::ai;
 use crate::audio::Audio;
 use crate::fallers::Fallers;
 use crate::particles::Particles;
 use crate::physics::{self, BALL_R, Ball, DT, Obstacle, Side, V2};
-use crate::render;
 use crate::rng::Rng;
 use crate::world::{self, Crater, Segment, SegmentKind};
-use macroquad::input::{
-    KeyCode, MouseButton, is_key_pressed, is_mouse_button_pressed, mouse_position, mouse_wheel,
-};
 use std::collections::VecDeque;
 
 const AOE_R: f32 = 3.2;
@@ -64,6 +63,35 @@ pub enum Phase {
     Paused,
     Victory,
     Defeat,
+}
+
+/// One frame of player intents, decoupled from macroquad: the platform
+/// layer polls hardware into this struct; headless drivers (tests, AI
+/// training) synthesize it directly. The same frame sequence with the
+/// same seeds replays the same duel.
+// Four independent edge-triggered events, not a mode — an intent
+// snapshot is the one place raw bools are the honest representation.
+#[allow(clippy::struct_excessive_bools)]
+#[derive(Copy, Clone, Debug, Default)]
+pub struct FrameInput {
+    /// World-space aim point; the platform layer maps the cursor through
+    /// `render::screen_to_world` so the sim never sees pixels.
+    pub aim: V2,
+    /// Mouse-wheel delta this frame; only its sign is consumed (one
+    /// `CHARGE_STEP` per non-zero frame).
+    pub wheel: f32,
+    /// Left mouse button pressed this frame (start round / fire).
+    pub click: bool,
+    /// Fire key pressed this frame.
+    pub fire: bool,
+    /// Pause toggle key pressed this frame.
+    pub pause: bool,
+    /// Restart key pressed this frame.
+    pub restart: bool,
+    /// Seed for the new round whenever this frame's inputs trigger a
+    /// restart; the platform layer draws it from the clock, a headless
+    /// driver fixes it for reproducibility.
+    pub restart_seed: u64,
 }
 
 /// Wind speed (m/s, +x), stochastic instead of a sine. Each round draws a
@@ -238,15 +266,15 @@ impl GameState {
         }
     }
 
-    fn restart(&mut self) {
-        *self = GameState::new(Rng::seed(fresh_seed()));
+    fn restart(&mut self, seed: u64) {
+        *self = GameState::new(Rng::seed(seed));
     }
 
     /// Advance the duel by `dt_real` (unscaled wall-clock seconds).
-    pub fn update(&mut self, dt_real: f32, audio: &mut Audio) {
+    pub fn update(&mut self, dt_real: f32, input: &FrameInput, audio: &mut Audio) {
         audio.set_wind(self.wind.current());
         audio.set_birds(self.wind.current());
-        self.handle_input(audio);
+        self.handle_input(input, audio);
         if matches!(self.phase, Phase::Playing | Phase::Victory | Phase::Defeat) {
             let dt = dt_real * self.timescale;
             self.t += dt;
@@ -278,63 +306,61 @@ impl GameState {
         }
     }
 
-    fn handle_input(&mut self, audio: &Audio) {
-        let clicked = is_mouse_button_pressed(MouseButton::Left);
+    /// Consume this frame's intents — a pure state machine over
+    /// [`FrameInput`]; no polling, so a headless driver just synthesizes
+    /// the struct.
+    fn handle_input(&mut self, input: &FrameInput, audio: &Audio) {
         match self.phase {
             Phase::Menu => {
-                if clicked {
+                if input.click {
                     self.phase = Phase::Playing;
                     audio.click();
                 }
             }
             Phase::Paused => {
-                if is_key_pressed(KeyCode::P) || is_key_pressed(KeyCode::Escape) {
+                if input.pause {
                     self.phase = Phase::Playing;
                     audio.click();
                 }
-                if is_key_pressed(KeyCode::R) {
-                    self.restart();
+                if input.restart {
+                    self.restart(input.restart_seed);
                     audio.click();
                 }
             }
             Phase::Playing => {
-                if is_key_pressed(KeyCode::P) || is_key_pressed(KeyCode::Escape) {
+                if input.pause {
                     self.phase = Phase::Paused;
                     audio.click();
                     return;
                 }
-                if is_key_pressed(KeyCode::R) {
-                    self.restart();
+                if input.restart {
+                    self.restart(input.restart_seed);
                     audio.click();
                     return;
                 }
                 // Aim: barrel tracks the cursor.
-                let (mx, my) = mouse_position();
-                let m = render::screen_to_world(mx, my);
                 let pivot = world::player_pivot();
-                let ang = (m.y - pivot.y).atan2(m.x - pivot.x).to_degrees();
+                let ang = (input.aim.y - pivot.y)
+                    .atan2(input.aim.x - pivot.x)
+                    .to_degrees();
                 self.player.angle_deg = ang.clamp(5.0, 80.0);
                 // Charge: wheel notches set it; persists between shots.
-                let (_, wheel_y) = mouse_wheel();
-                if wheel_y != 0.0 {
+                if input.wheel != 0.0 {
                     self.player.charge =
-                        (self.player.charge + wheel_y.signum() * CHARGE_STEP).clamp(0.18, 1.0);
+                        (self.player.charge + input.wheel.signum() * CHARGE_STEP).clamp(0.18, 1.0);
                 }
-                if clicked {
-                    self.fire_player(audio);
-                }
-                if is_key_pressed(KeyCode::Space) {
+                if input.click || input.fire {
                     self.fire_player(audio);
                 }
             }
             Phase::Victory | Phase::Defeat => {
-                if is_key_pressed(KeyCode::R) {
-                    self.restart();
+                if input.restart {
+                    self.restart(input.restart_seed);
                     audio.click();
                     return;
                 }
-                if clicked && self.end_t >= END_HOLD {
-                    self.restart();
+                if input.click && self.end_t >= END_HOLD {
+                    self.restart(input.restart_seed);
                     audio.click();
                 }
             }
@@ -656,13 +682,4 @@ fn contact(prev: V2, ball: &Ball, segments: &[Segment], keep_alive: bool) -> Opt
         h: 1.6,
     };
     physics::hit(p, BALL_R, &o).map(|c| (c, false))
-}
-
-/// Fresh seed from the platform clock (works native + wasm).
-fn fresh_seed() -> u64 {
-    let mut x = macroquad::miniquad::date::now().to_bits();
-    x ^= x >> 12;
-    x ^= x << 25;
-    x ^= x >> 27;
-    x.wrapping_mul(0x2545_F491_4F6C_DD1D)
 }
