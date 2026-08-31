@@ -1,0 +1,23 @@
+# Trunk config for the macroquad wasm build.
+#
+# macroquad is not a wasm-bindgen app: trunk's default rust pipeline builds
+# the crate and emits wasm-bindgen-wrapped artifacts (siege-<hash>.js +
+# siege-<hash>_bg.wasm) that we never boot. Instead, a post_build hook copies
+# the pristine cargo artifact into the dist as siege.wasm, which
+# mq_js_bundle.js (miniquad shell + quad-snd plugin) boots via `load()`.
+#
+# inject_scripts = false keeps trunk's wasm-bindgen loader module and SRI
+# preloads out of the output HTML. They reference root-absolute
+# /siege-<hash>.js URLs which 404 when the site is served from a subpath such
+# as https://devfire.github.io/siege/. The `trunk serve` autoreloader is a
+# separate flag (inject_autoloader) and keeps working.
+[build]
+inject_scripts = false
+
+# Boots the game: cargo-built wasm for the active profile (trunk exports
+# TRUNK_PROFILE = debug|release), staged as dist/siege.wasm. Runs after the
+# rust pipeline finishes, so the artifact is fresh and profile-correct.
+[[hooks]]
+stage = "post_build"
+command = "sh"
+command_arguments = ['-c', 'set -e; dir=$([ "$TRUNK_PROFILE" = release ] && echo release || echo debug); cp "target/wasm32-unknown-unknown/$dir/siege.wasm" "$TRUNK_STAGING_DIR/siege.wasm"; rm -f "$TRUNK_STAGING_DIR"/siege-*.js "$TRUNK_STAGING_DIR"/siege-*_bg.wasm']

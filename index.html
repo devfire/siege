@@ -5,15 +5,16 @@
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <title>Siege!</title>
   <style>html, body, canvas { margin: 0; padding: 0; width: 100%; height: 100%; overflow: hidden; position: absolute; background: #1a1423; z-index: 0; }</style>
-  <!-- macroquad is not a wasm-bindgen app: keep trunk's rust target for the
-       wasm build/watch, but suppress its bindgen import and boot the pristine
-       cargo artifact ourselves via miniquad's shell. -->
-  <link data-trunk rel="rust" data-wasm-no-import data-wasm-opt="z" />
+  <!-- macroquad is not a wasm-bindgen app, so trunk's rust loader is not used
+       (see Trunk.toml: inject_scripts = false + a post_build hook that stages
+       the pristine cargo artifact as siege.wasm). mq_js_bundle.js is the
+       miniquad shell + quad-snd plugin; it boots the wasm below. Every path
+       is relative, so the page works at any base URL such as
+       https://devfire.github.io/siege/. -->
 </head>
 <body>
   <canvas id="glcanvas" tabindex="1"></canvas>
   <link data-trunk rel="copy-file" href="mq_js_bundle.js" />
-  <link data-trunk rel="copy-file" href="target/wasm32-unknown-unknown/debug/siege.wasm" />
   <script src="mq_js_bundle.js"></script>
   <script>load("siege.wasm");</script>
 </body>
