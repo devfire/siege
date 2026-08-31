@@ -111,7 +111,7 @@ The castle defender AI (`src/ai.rs`) operates on a **Probe -> Observe -> Invert 
 
 ### 1. Noisy Prior & Initial Grid-Search Probe
 The defender does not have immediate ground-truth knowledge of the wind. Instead:
-- Initial wind is sampled with Gaussian noise: $\hat{v}_{\text{wind}} = v_{\text{wind\_true}} + \mathcal{N}(0, \sigma = 2.5\text{ m/s})$.
+- Initial wind is sampled with Gaussian noise: $\hat{v}_{\text{wind}} = v_{\text{wind,true}} + \mathcal{N}(0, \sigma = 2.5\text{ m/s})$.
 - The AI runs an offline brute-force simulation grid across candidate angles and charges:
   - **Angle Range:** $25^\circ \le \theta \le 65^\circ$ in steps of $2^\circ$ (21 samples).
   - **Charge Range:** $0.20 \le c \le 1.00$ in steps of $0.02$ (41 samples).
@@ -123,7 +123,7 @@ When a cannonball impacts at $x_{\text{impact}}$, the AI uses the splash locatio
 - Given the fired parameters $(\theta, c)$, landing distance $x$ is strictly monotonically increasing with wind speed (tailwind pushes shots right/positive, headwind pulls left/negative).
 - The AI executes 24 iterations of bisection over the interval $[-16.0, 16.0]\text{ m/s}$:
   $$\text{mid} = \frac{v_{\text{lo}} + v_{\text{hi}}}{2}$$
-  $$x_{\text{sim}} = \text{simulate\_landing}(\theta, c, \text{dir} = -1, \text{wind} = \text{mid})$$
+  $$x_{\text{sim}} = \text{simulate-landing}(\theta, c, \text{dir} = -1, \text{wind} = \text{mid})$$
   $$\text{if } x_{\text{sim}} < x_{\text{impact}} \implies v_{\text{lo}} = \text{mid} \quad \text{else } v_{\text{hi}} = \text{mid}$$
 - This refines the AI's internal wind estimate to sub-millimeter trajectory accuracy under steady wind.
 
