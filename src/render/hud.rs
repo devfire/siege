@@ -10,6 +10,7 @@
 use crate::game::{GameState, Phase};
 use crate::world::SegmentKind;
 use macroquad::color::Color;
+use macroquad::math::Rect;
 use macroquad::shapes::{draw_line, draw_rectangle};
 use macroquad::text::{TextDimensions, TextParams, draw_text_ex, measure_text};
 use macroquad::window::{screen_height, screen_width};
@@ -21,6 +22,11 @@ const GOOD_HP: Color = Color::from_hex(0x6F_A3_5C);
 const MID_HP: Color = Color::from_hex(0xD9_A4_41);
 const LOW_HP: Color = Color::from_hex(0xC2_3B_2E);
 const DEAD_HP: Color = Color::from_hex(0x3A_36_34);
+
+/// Mute-toggle size; its position derives from the screen, see
+/// [`mute_button_rect`].
+const MUTE_BTN_W: f32 = 96.0;
+const MUTE_BTN_H: f32 = 28.0;
 
 fn txt(text: &str, x: f32, y: f32, size: u16, color: Color, font: Option<&macroquad::text::Font>) {
     draw_text_ex(
@@ -58,7 +64,7 @@ fn hp_color(f: f32) -> Color {
     }
 }
 
-pub(super) fn draw_ui(state: &GameState, font: Option<&macroquad::text::Font>) {
+pub(super) fn draw_ui(state: &GameState, muted: bool, font: Option<&macroquad::text::Font>) {
     let (w, h) = (screen_width(), screen_height());
     // Player HP bar, top-left.
     draw_rectangle(24.0, 24.0, 220.0, 20.0, PARCHMENT);
@@ -144,6 +150,43 @@ pub(super) fn draw_ui(state: &GameState, font: Option<&macroquad::text::Font>) {
         }
     }
     draw_overlays(state, font);
+    // Mute toggle, top-right under the keep bar. Painted after the
+    // overlay veils so it stays visible in menu/pause/end, matching
+    // `update`, which honors the toggle in every phase.
+    draw_mute_button(muted, font);
+}
+
+/// Small parchment toggle. The label states the action: "UNMUTE" while
+/// silent, "MUTE" while audible.
+fn draw_mute_button(muted: bool, font: Option<&macroquad::text::Font>) {
+    let r = mute_button_rect();
+    draw_rectangle(
+        r.x,
+        r.y,
+        r.w,
+        r.h,
+        Color::new(PARCHMENT.r, PARCHMENT.g, PARCHMENT.b, 0.85),
+    );
+    txt_centered(
+        if muted { "UNMUTE" } else { "MUTE" },
+        r.x + r.w * 0.5,
+        r.y + 20.0,
+        18,
+        INK,
+        font,
+    );
+}
+
+/// Screen-space mute-button hitbox — the one place this geometry lives.
+/// `draw_ui` paints it and the platform layer (`lib.rs`) hit-tests clicks
+/// against it, so the label and the click zone cannot drift apart.
+pub(crate) fn mute_button_rect() -> Rect {
+    Rect::new(
+        screen_width() - 24.0 - MUTE_BTN_W,
+        64.0,
+        MUTE_BTN_W,
+        MUTE_BTN_H,
+    )
 }
 
 /// Aim/charge readout, bottom-left. While the touch-hole fuse burns the
@@ -191,7 +234,7 @@ fn draw_overlays(state: &GameState, font: Option<&macroquad::text::Font>) {
                 font,
             );
             txt_centered(
-                "P pause \u{00B7} R restart \u{00B7} destroy the keep before the defenders zero in",
+                "P pause \u{00B7} R restart \u{00B7} M mute \u{00B7} destroy the keep before the defenders zero in",
                 w * 0.5,
                 h * 0.66,
                 20,

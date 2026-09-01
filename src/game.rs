@@ -69,7 +69,7 @@ pub enum Phase {
 /// layer polls hardware into this struct; headless drivers (tests, AI
 /// training) synthesize it directly. The same frame sequence with the
 /// same seeds replays the same duel.
-// Four independent edge-triggered events, not a mode — an intent
+// Five independent edge-triggered events, not a mode — an intent
 // snapshot is the one place raw bools are the honest representation.
 #[allow(clippy::struct_excessive_bools)]
 #[derive(Copy, Clone, Debug, Default)]
@@ -88,6 +88,10 @@ pub struct FrameInput {
     pub pause: bool,
     /// Restart key pressed this frame.
     pub restart: bool,
+    /// Mute toggle fired this frame - the HUD button press or the M key,
+    /// flattened by the platform layer into one edge. Honored in every
+    /// phase.
+    pub toggle_mute: bool,
     /// Seed for the new round whenever this frame's inputs trigger a
     /// restart; the platform layer draws it from the clock, a headless
     /// driver fixes it for reproducibility.
@@ -272,6 +276,9 @@ impl GameState {
 
     /// Advance the duel by `dt_real` (unscaled wall-clock seconds).
     pub fn update(&mut self, dt_real: f32, input: &FrameInput, audio: &mut Audio) {
+        if input.toggle_mute {
+            audio.toggle_mute();
+        }
         audio.set_wind(self.wind.current());
         audio.set_birds(self.wind.current());
         self.handle_input(input, audio);

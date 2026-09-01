@@ -21,26 +21,35 @@ pub async fn run() {
         let dt = macroquad::time::get_frame_time().min(0.05);
         let input = frame_input();
         state.update(dt, &input, &mut audio);
-        render::draw(&state, font.as_ref());
+        render::draw(&state, audio.muted(), font.as_ref());
         macroquad::window::next_frame().await;
     }
 }
 
 /// Poll macroquad into a [`game::FrameInput`] — the only place hardware
 /// input is read. The aim cursor is mapped to world space here so the
-/// game sim stays macroquad-free.
+/// game sim stays macroquad-free. A press on the HUD mute button is
+/// consumed here: it toggles audio and never leaks through as a game
+/// click (start round / fire / restart).
 fn frame_input() -> game::FrameInput {
     use macroquad::input::{
         KeyCode, MouseButton, is_key_pressed, is_mouse_button_pressed, mouse_position, mouse_wheel,
     };
     let (mx, my) = mouse_position();
+    let btn = render::mute_button_rect();
+    let mute_hit = is_mouse_button_pressed(MouseButton::Left)
+        && mx >= btn.x
+        && mx < btn.x + btn.w
+        && my >= btn.y
+        && my < btn.y + btn.h;
     game::FrameInput {
         aim: render::screen_to_world(mx, my),
         wheel: mouse_wheel().1,
-        click: is_mouse_button_pressed(MouseButton::Left),
+        click: is_mouse_button_pressed(MouseButton::Left) && !mute_hit,
         fire: is_key_pressed(KeyCode::Space),
         pause: is_key_pressed(KeyCode::P) || is_key_pressed(KeyCode::Escape),
         restart: is_key_pressed(KeyCode::R),
+        toggle_mute: mute_hit || is_key_pressed(KeyCode::M),
         restart_seed: fresh_seed(),
     }
 }

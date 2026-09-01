@@ -3,6 +3,8 @@
 //! whose volume tracks the live wind speed. Load failures degrade to
 //! silence (`Option<Sound>` + no-op `play`), so the game runs where the
 //! audio backend is missing (headless CI, blocked wasm autoplay).
+//! Starts muted (meetings!); the HUD button or the M key toggles via
+//! [`Audio::toggle_mute`].
 #![allow(
     clippy::cast_precision_loss,
     clippy::cast_possible_truncation,
@@ -305,6 +307,9 @@ pub struct Audio {
     thud: Option<Sound>,
     click: Option<Sound>,
     birds: Option<Sound>,
+    /// Master mute. Starts ON so the game opens silent; gates one-shots
+    /// and drives the ambient beds to 0.
+    muted: bool,
     /// Last wind volume pushed to the mixer; gates per-frame FFI calls.
     wind_vol: f32,
     /// Same gating for the birdsong bed.
@@ -371,12 +376,16 @@ impl Audio {
             thud,
             click,
             birds,
+            muted: true,
             wind_vol: -1.0,
             birds_vol: -1.0,
         }
     }
 
-    fn play(s: Option<&Sound>, volume: f32) {
+    fn play(&self, s: Option<&Sound>, volume: f32) {
+        if self.muted {
+            return;
+        }
         if let Some(s) = s {
             play_sound_once(s);
             // play_sound_once restarts at the stored volume; re-apply ours.
@@ -384,56 +393,96 @@ impl Audio {
         }
     }
 
+    /// Flip the master mute. Muting also zeroes anything still ringing
+    /// so the cut is instant; unmuting re-arms the ambient beds — their
+    /// volumes re-push on the next `set_wind`/`set_birds`.
+    pub fn toggle_mute(&mut self) {
+        self.muted = !self.muted;
+        self.wind_vol = -1.0;
+        self.birds_vol = -1.0;
+        if self.muted {
+            for s in [
+                &self.boom,
+                &self.boom_far,
+                &self.impact,
+                &self.crumble,
+                &self.fuse,
+                &self.victory,
+                &self.defeat,
+                &self.wind,
+                &self.whistle,
+                &self.thud,
+                &self.click,
+                &self.birds,
+            ]
+            .into_iter()
+            .flatten()
+            {
+                set_sound_volume(s, 0.0);
+            }
+        }
+    }
+
+    /// Master-mute state — the HUD button label reads it.
+    #[must_use]
+    pub fn muted(&self) -> bool {
+        self.muted
+    }
+
     /// Player cannon blast (full presence).
     pub fn boom_near(&self) {
-        Self::play(self.boom.as_ref(), 0.9);
+        self.play(self.boom.as_ref(), 0.9);
     }
 
     /// Defender cannon blast, thinned by distance across the field.
     pub fn boom_far(&self) {
-        Self::play(self.boom_far.as_ref(), 0.45);
+        self.play(self.boom_far.as_ref(), 0.45);
     }
 
     /// Ball impact. `near` 0..1 scales presence by distance to the
     /// player; `ground` picks the earth thud over the stone crack.
     pub fn impact(&self, near: f32, ground: bool) {
         if ground {
-            Self::play(self.thud.as_ref(), 0.45 + 0.4 * near);
+            self.play(self.thud.as_ref(), 0.45 + 0.4 * near);
         } else {
-            Self::play(self.impact.as_ref(), 0.45 + 0.5 * near);
+            self.play(self.impact.as_ref(), 0.45 + 0.5 * near);
         }
     }
 
     /// Falling-ball warning, fired once per ball on its final descent.
     pub fn whistle(&self, volume: f32) {
-        Self::play(self.whistle.as_ref(), volume);
+        self.play(self.whistle.as_ref(), volume);
     }
 
     /// UI tick for menu / restart / pause.
     pub fn click(&self) {
-        Self::play(self.click.as_ref(), 0.5);
+        self.play(self.click.as_ref(), 0.5);
     }
 
     pub fn crumble(&self, near: f32) {
-        Self::play(self.crumble.as_ref(), 0.35 + 0.45 * near);
+        self.play(self.crumble.as_ref(), 0.35 + 0.45 * near);
     }
 
     pub fn fuse(&self, near: bool) {
-        Self::play(self.fuse.as_ref(), if near { 0.5 } else { 0.22 });
+        self.play(self.fuse.as_ref(), if near { 0.5 } else { 0.22 });
     }
 
     pub fn victory(&self) {
-        Self::play(self.victory.as_ref(), 0.8);
+        self.play(self.victory.as_ref(), 0.8);
     }
 
     pub fn defeat(&self) {
-        Self::play(self.defeat.as_ref(), 0.8);
+        self.play(self.defeat.as_ref(), 0.8);
     }
 
     /// Ride the ambient bed on the live wind (m/s, ±14). Only touches the
     /// mixer when the target moved by > 0.01.
     pub fn set_wind(&mut self, wind_ms: f32) {
-        let target = 0.04 + (wind_ms.abs() / 14.0) * 0.16;
+        let target = if self.muted {
+            0.0
+        } else {
+            0.04 + (wind_ms.abs() / 14.0) * 0.16
+        };
         if (target - self.wind_vol).abs() < 0.01 {
             return;
         }
@@ -446,7 +495,11 @@ impl Audio {
     /// Ride the birdsong bed inversely to the wind — birds go quiet in a
     /// blow. Same ±0.01 mixer gating as the wind bed.
     pub fn set_birds(&mut self, wind_ms: f32) {
-        let target = (0.13 - wind_ms.abs() / 14.0 * 0.11).max(0.02);
+        let target = if self.muted {
+            0.0
+        } else {
+            (0.13 - wind_ms.abs() / 14.0 * 0.11).max(0.02)
+        };
         if (target - self.birds_vol).abs() < 0.01 {
             return;
         }

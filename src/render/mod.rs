@@ -27,6 +27,10 @@ use macroquad::window::{screen_height, screen_width};
 // renderer share one deterministic layout.
 pub(super) use crate::world::hash2;
 
+// The platform layer hit-tests the mute button against the same rect the
+// HUD paints.
+pub(crate) use hud::mute_button_rect;
+
 pub const WORLD_W: f32 = 200.0;
 pub const WORLD_H: f32 = 112.5;
 const PAGE_BG: Color = Color::from_hex(0x1A_14_23);
@@ -87,7 +91,7 @@ pub(super) fn darken(c: Color, amt: f32) -> Color {
     mix(c, Color::new(0.0, 0.0, 0.0, c.a), amt)
 }
 
-pub fn draw(state: &GameState, font: Option<&macroquad::text::Font>) {
+pub fn draw(state: &GameState, muted: bool, font: Option<&macroquad::text::Font>) {
     macroquad::window::clear_background(PAGE_BG);
     let s = scale();
     let (ox, oy) = origin();
@@ -118,7 +122,7 @@ pub fn draw(state: &GameState, font: Option<&macroquad::text::Font>) {
     );
     draw_vignette();
     draw_hurt(state);
-    draw_ui(state, font);
+    draw_ui(state, muted, font);
 }
 
 mod actors;
