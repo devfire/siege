@@ -195,6 +195,7 @@ fn draw_player_cannon(state: &GameState, w: &dyn Fn(V2) -> Vec2, s: f32) {
         );
     }
     draw_circle(wheel.x, wheel.y, 0.16 * s, darken(WHEEL_C, 0.4));
+    // Hub bolt.
     // Barrel, kicked back along its axis while `recoil` decays.
     let a = state.player.angle_deg.to_radians();
     let dir = V2 {
@@ -214,6 +215,7 @@ fn draw_player_cannon(state: &GameState, w: &dyn Fn(V2) -> Vec2, s: f32) {
             color: reload_tint,
         },
     );
+    barrel_cylinder(w, s, bp, dir, a);
     // Muzzle band.
     let muzzle = w(bp + dir * 2.75);
     draw_circle(muzzle.x, muzzle.y, 0.3 * s, darken(IRON, 0.3));
@@ -228,6 +230,49 @@ fn draw_player_cannon(state: &GameState, w: &dyn Fn(V2) -> Vec2, s: f32) {
             state.t,
         );
     }
+}
+
+/// Sunlit top edge + shaded belly along a barrel: offset thin quads in
+/// barrel space fake a cylindrical highlight without textures. Split out
+/// so the cannon body stays under the line-count lint.
+fn barrel_cylinder(w: &dyn Fn(V2) -> Vec2, s: f32, bp: V2, dir: V2, a: f32) {
+    let perp = V2 {
+        x: -dir.y,
+        y: dir.x,
+    };
+    let hi0 = w(bp + perp * 0.16);
+    draw_rectangle_ex(
+        hi0.x,
+        hi0.y,
+        2.7 * s,
+        0.10 * s,
+        DrawRectangleParams {
+            offset: vec2(0.0, 0.5),
+            rotation: -a,
+            color: Color::new(1.0, 0.88, 0.66, 0.35),
+        },
+    );
+    let lo0 = w(bp - perp * 0.22);
+    draw_rectangle_ex(
+        lo0.x,
+        lo0.y,
+        2.7 * s,
+        0.10 * s,
+        DrawRectangleParams {
+            offset: vec2(0.0, 0.5),
+            rotation: -a,
+            color: Color::new(0.0, 0.0, 0.0, 0.30),
+        },
+    );
+    // Breech knob.
+    let breech = w(bp - dir * 0.25);
+    draw_circle(breech.x, breech.y, 0.30 * s, darken(IRON, 0.25));
+    draw_circle(
+        breech.x - 0.06 * s,
+        breech.y - 0.07 * s,
+        0.12 * s,
+        Color::new(1.0, 0.9, 0.7, 0.5),
+    );
 }
 
 /// Swelling three-layer touch-hole fire: wide warm halo, molten core,
@@ -364,7 +409,16 @@ fn draw_balls(state: &GameState, shake: Vec2) {
         let v = w2s(b.pos) + shake;
         // Visual radius floors keep the ball readable at small window scales.
         let r = (BALL_R * s).max(3.5);
+        // Dawn rim on the sunward side + deep base so the shot reads as
+        // iron, not a flat black dot.
+        draw_circle(v.x, v.y, r * 1.18, Color::new(1.0, 0.62, 0.3, 0.25));
         draw_circle(v.x, v.y, r, BALL_C);
+        draw_circle(
+            v.x - r * 0.18,
+            v.y + r * 0.2,
+            r * 0.72,
+            Color::new(0.23, 0.23, 0.28, 1.0),
+        );
         // Surface dimples riding `spin`: the ball visibly rolls with its
         // travel instead of sliding.
         for dimp in 0..3u16 {
@@ -374,14 +428,21 @@ fn draw_balls(state: &GameState, shake: Vec2) {
                 spot.x,
                 spot.y,
                 (r * 0.2).max(1.2),
-                Color::new(0.15, 0.15, 0.19, 0.8),
+                Color::new(0.1, 0.1, 0.13, 0.85),
             );
         }
+        // Hot sun glint + cool under-shade.
+        draw_circle(
+            v.x - r * 0.34,
+            v.y - r * 0.36,
+            r * 0.30,
+            Color::new(1.0, 0.9, 0.72, 0.9),
+        );
         draw_circle(
             v.x - r * 0.3,
             v.y - r * 0.32,
-            r * 0.28,
-            Color::new(1.0, 1.0, 1.0, 0.7),
+            r * 0.16,
+            Color::new(1.0, 1.0, 0.96, 0.95),
         );
     }
 }
@@ -416,10 +477,26 @@ fn draw_aim(state: &GameState, shake: Vec2) {
             v = nv;
         }
         // One dash per half-metre of arc; dash centered on the sample.
+        // Soft halo pass under a hot core so the guide glows at dawn.
         if i % 8 == 0 {
             let s0 = w2s(prev) + shake;
             let s1 = w2s(p) + shake;
-            draw_line(s0.x, s0.y, s1.x, s1.y, 2.0, Color::new(1.0, 1.0, 0.95, 0.4));
+            draw_line(
+                s0.x,
+                s0.y,
+                s1.x,
+                s1.y,
+                5.0,
+                Color::new(1.0, 0.8, 0.45, 0.16),
+            );
+            draw_line(
+                s0.x,
+                s0.y,
+                s1.x,
+                s1.y,
+                2.0,
+                Color::new(1.0, 0.97, 0.86, 0.75),
+            );
         }
     }
 }
@@ -434,6 +511,24 @@ fn draw_markers(state: &GameState, shake: Vec2) {
             Color::new(0.95, 0.35, 0.28, 0.9)
         };
         let r = 0.5 * s;
+        // Halo under the X so fresh impacts pop against grass and stone.
+        draw_circle(v.x, v.y, r * 1.6, Color::new(c.r, c.g, c.b, 0.22));
+        draw_line(
+            v.x - r,
+            v.y - r,
+            v.x + r,
+            v.y + r,
+            4.0,
+            Color::new(c.r, c.g, c.b, 0.35),
+        );
+        draw_line(
+            v.x - r,
+            v.y + r,
+            v.x + r,
+            v.y - r,
+            4.0,
+            Color::new(c.r, c.g, c.b, 0.35),
+        );
         draw_line(v.x - r, v.y - r, v.x + r, v.y + r, 2.0, c);
         draw_line(v.x - r, v.y + r, v.x + r, v.y - r, 2.0, c);
     }

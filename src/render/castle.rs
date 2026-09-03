@@ -56,6 +56,39 @@ pub(super) fn draw_castle(state: &GameState, shake: Vec2) {
                     y: seg.y0 + seg.h,
                 });
                 draw_rectangle(tl.x, tl.y, seg.w * s, seg.h * s, base);
+                // Dawn key from the left (sun at x=60): sunlit left edge,
+                // shaded right edge, hot top rim, AO pooling at the base.
+                // Four thin overlays turn the flat slabs into lit volumes.
+                let edge = 0.35 * s;
+                draw_rectangle(
+                    tl.x,
+                    tl.y,
+                    edge,
+                    seg.h * s,
+                    Color::new(1.0, 0.85, 0.62, 0.20),
+                );
+                draw_rectangle(
+                    tl.x + seg.w * s - edge,
+                    tl.y,
+                    edge,
+                    seg.h * s,
+                    Color::new(0.08, 0.06, 0.12, 0.28),
+                );
+                draw_rectangle(
+                    tl.x,
+                    tl.y,
+                    seg.w * s,
+                    (0.22 * s).max(1.5),
+                    Color::new(1.0, 0.9, 0.7, 0.30),
+                );
+                let ao_h = (seg.h * s * 0.22).min(2.2 * s);
+                draw_rectangle(
+                    tl.x,
+                    tl.y + seg.h * s - ao_h,
+                    seg.w * s,
+                    ao_h,
+                    Color::new(0.05, 0.04, 0.08, 0.30),
+                );
                 match seg.kind {
                     SegmentKind::Gate => draw_gate_planks(seg.x0, seg.y0, seg.w, seg.h, &w),
                     _ => draw_stone(seg.x0, seg.y0, seg.w, seg.h, seed, &w),

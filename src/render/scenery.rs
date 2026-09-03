@@ -31,15 +31,25 @@ const CRATER_C: Color = Color::from_hex(0x4A_35_27);
 pub(super) fn draw_sky(shake: Vec2) {
     let (_, oy) = origin();
     let horizon = w2s(V2 { x: 0.0, y: 0.0 }).y + shake.y;
-    let bands = 26u16;
+    // 64 bands kill the stripe steps the old 26-band ramp showed on
+    // large windows; a whisper of hash dither breaks up the remaining
+    // 8-bit gradient contouring without visible noise.
+    let bands = 64u16;
     let band_h = (horizon - oy) / f32::from(bands);
     for i in 0..bands {
         let t = f32::from(i) / f32::from(bands - 1);
-        let col = if t < 0.55 {
-            mix(SKY_TOP, SKY_MID, t / 0.55)
+        let mut col = if t < 0.55 {
+            // Ease the stops so the zenith stays deep and the mid blooms.
+            let u = t / 0.55;
+            mix(SKY_TOP, SKY_MID, u * u * (3.0 - 2.0 * u))
         } else {
-            mix(SKY_MID, SKY_HOR, (t - 0.55) / 0.45)
+            let u = (t - 0.55) / 0.45;
+            mix(SKY_MID, SKY_HOR, u.sqrt())
         };
+        let dither = (hash2(u32::from(i), 77) - 0.5) * 0.012;
+        col.r = (col.r + dither).clamp(0.0, 1.0);
+        col.g = (col.g + dither).clamp(0.0, 1.0);
+        col.b = (col.b + dither).clamp(0.0, 1.0);
         draw_rectangle(
             0.0,
             oy + f32::from(i) * band_h + shake.y,
@@ -48,12 +58,29 @@ pub(super) fn draw_sky(shake: Vec2) {
             col,
         );
     }
+    // Warm haze hugging the horizon so the sky melts into the hills.
+    let sc = scale();
+    draw_rectangle(
+        0.0,
+        horizon - 7.0 * sc + shake.y,
+        screen_width(),
+        7.0 * sc,
+        Color::new(1.0, 0.72, 0.42, 0.14),
+    );
+    draw_rectangle(
+        0.0,
+        horizon - 3.0 * sc + shake.y,
+        screen_width(),
+        3.0 * sc,
+        Color::new(1.0, 0.80, 0.55, 0.12),
+    );
 }
 
 pub(super) fn draw_sun(shake: Vec2) {
     let s = scale();
     let c = w2s(V2 { x: 60.0, y: 78.0 }) + shake;
-    for (rm, alpha) in [(16.0, 0.07), (10.0, 0.13), (6.5, 0.22)] {
+    // Wide-to-tight falloff: vast faint bloom, mid glow, hot disc, white core.
+    for (rm, alpha) in [(26.0, 0.04), (16.0, 0.07), (10.0, 0.13), (6.5, 0.22)] {
         draw_circle(
             c.x,
             c.y,
@@ -62,8 +89,18 @@ pub(super) fn draw_sun(shake: Vec2) {
         );
     }
     draw_circle(c.x, c.y, 4.0 * s, SUN_C);
+    draw_circle(c.x, c.y, 3.1 * s, Color::new(1.0, 0.96, 0.86, 1.0));
+    draw_circle(c.x, c.y, 2.1 * s, Color::new(1.0, 1.0, 0.96, 1.0));
+    // Horizontal dawn streak through the disc.
+    draw_ellipse(
+        c.x,
+        c.y,
+        9.5 * s,
+        0.9 * s,
+        0.0,
+        Color::new(1.0, 0.85, 0.6, 0.18),
+    );
 }
-
 pub(super) fn draw_clouds(state: &GameState, shake: Vec2) {
     let s = scale();
     for layer in 0..2u32 {
@@ -81,32 +118,45 @@ pub(super) fn draw_clouds(state: &GameState, shake: Vec2) {
             // teleports clouds by Δwind × t on every wind change.
             let drift = state.t * (0.9 + 0.5 * h2) + state.wind.travel() * 0.22;
             let cx = ((base_x + drift + 40.0) % 280.0 + 280.0) % 280.0 - 40.0;
-            let col = Color::new(0.98, 0.9, 0.82, alpha);
             let p = w2s(V2 { x: cx, y: cy }) + off;
-            draw_ellipse(p.x, p.y, size * s, size * 0.42 * s, 0.0, col);
+            // Lit top first, then the shaded belly offset below — one extra
+            // pass per puff reads as volume instead of flat cutouts.
+            let belly = Color::new(0.72, 0.52, 0.55, alpha * 0.85);
+            let lit = Color::new(1.0, 0.93, 0.86, alpha);
+            let puffs = [
+                (0.0, 0.0, 1.0, 0.42),
+                (-0.62, 0.1, 0.6, 0.3),
+                (0.66, 0.12, 0.55, 0.28),
+                (0.1, -0.26, 0.5, 0.3),
+            ];
+            for (dx, dy, wr, hr) in puffs {
+                draw_ellipse(
+                    p.x + dx * size * s,
+                    p.y + (dy * size + 0.22 * size) * s,
+                    size * wr * s,
+                    size * hr * s,
+                    0.0,
+                    belly,
+                );
+            }
+            for (dx, dy, wr, hr) in puffs {
+                draw_ellipse(
+                    p.x + dx * size * s,
+                    p.y + dy * size * s,
+                    size * wr * s,
+                    size * hr * s,
+                    0.0,
+                    lit,
+                );
+            }
+            // Sun-kissed rim on the sunward edge.
             draw_ellipse(
-                p.x - size * 0.62 * s,
-                p.y + size * 0.1 * s,
-                size * 0.6 * s,
-                size * 0.3 * s,
-                0.0,
-                col,
-            );
-            draw_ellipse(
-                p.x + size * 0.66 * s,
-                p.y + size * 0.12 * s,
+                p.x - size * 0.25 * s,
+                p.y - size * 0.22 * s,
                 size * 0.55 * s,
-                size * 0.28 * s,
-                0.0,
-                col,
-            );
-            draw_ellipse(
-                p.x + size * 0.1 * s,
-                p.y - size * 0.26 * s,
-                size * 0.5 * s,
-                size * 0.3 * s,
-                0.0,
-                col,
+                size * 0.16 * s,
+                -0.15,
+                Color::new(1.0, 0.98, 0.94, alpha * 0.9),
             );
         }
     }
@@ -125,17 +175,24 @@ struct Ridge {
     base: f32,
 }
 
-/// One mountain silhouette layer: heightfield = sum of two sines, filled
-/// down below the baseline so the ground always covers the seam.
 fn mountain_layer(shake: Vec2, r: &Ridge) {
     let off = shake * r.par;
     let bottom = w2s(V2 { x: 0.0, y: 0.0 }).y + off.y + 40.0;
+    // 1.8 m steps instead of 5 m: the old facets telegraphed as zigzag
+    // polygons on wide windows. Fill quads first, then one highlight
+    // polyline along the ridge so the silhouette catches the dawn.
     let mut prev: Option<Vec2> = None;
+    let mut ridge: [Vec2; 128] = [vec2(0.0, 0.0); 128];
+    let mut n = 0usize;
     let mut ix = 0i32;
-    while ix <= 44 {
-        let x = -10.0 + 5.0 * ix as f32;
+    while ix <= 120 {
+        let x = -10.0 + 1.833_333_3 * ix as f32;
         let y = r.base + r.amp1 * (r.f1 * x + r.p1).sin() + r.amp2 * (r.f2 * x + r.p2).sin();
         let pt = w2s(V2 { x, y }) + off;
+        if n < ridge.len() {
+            ridge[n] = pt;
+            n += 1;
+        }
         if let Some(prev_pt) = prev {
             let bl = vec2(prev_pt.x, bottom);
             let br = vec2(pt.x, bottom);
@@ -144,6 +201,17 @@ fn mountain_layer(shake: Vec2, r: &Ridge) {
         }
         prev = Some(pt);
         ix += 1;
+    }
+    let hl = Color::new(1.0, 0.72, 0.5, 0.28);
+    for k in 1..n {
+        draw_line(
+            ridge[k - 1].x,
+            ridge[k - 1].y,
+            ridge[k].x,
+            ridge[k].y,
+            2.0,
+            hl,
+        );
     }
 }
 
@@ -226,8 +294,13 @@ pub(super) fn draw_ground(state: &GameState, shake: Vec2) {
             x: x1,
             y: world::ground_height(x1),
         });
-        let patch = 0.85 + 0.3 * hash2(idx, 3);
-        let col = mix(GRASS_TOP, GRASS_LOW, (0.45 * patch).min(1.0));
+        // Low-frequency meadow variation (two slow sines) + a whisper of
+        // hash so adjacent metres no longer checkerboard.
+        let xm = (x0 + x1) * 0.5;
+        let smooth = 0.5 + 0.5 * (0.06 * xm + 1.0).sin() * (0.023 * xm + 0.4).sin();
+        let grain = hash2(idx, 3) - 0.5;
+        let patch = (0.32 + 0.28 * smooth + 0.06 * grain).clamp(0.0, 1.0);
+        let col = mix(GRASS_LOW, GRASS_TOP, patch);
         let bl = vec2(p0.x, baseline);
         let br = vec2(p1.x, baseline);
         draw_triangle(p0, p1, br, col);
@@ -255,13 +328,30 @@ pub(super) fn draw_ground(state: &GameState, shake: Vec2) {
         prev = Some(pt);
         idx += 1;
     }
-    // Dirt column from world floor to the bottom of the screen.
+    // Dirt column with a soft vertical falloff + sun-side warmth, so the
+    // old flat brown slab gains depth. Eight strips are cheap and band-free
+    // at these low-contrast stops.
+    let dirt_h = (screen_height() - baseline).max(0.0);
+    for k in 0..8u16 {
+        let t0 = f32::from(k) / 8.0;
+        let t1 = f32::from(k + 1) / 8.0;
+        let mut col = mix(DIRT, darken(DIRT, 0.45), t0 * t0);
+        col = mix(col, Color::from_hex(0x8A_6A_48), (1.0 - t0) * 0.18);
+        draw_rectangle(
+            0.0,
+            baseline + dirt_h * t0,
+            screen_width(),
+            dirt_h * (t1 - t0) + 1.5,
+            col,
+        );
+    }
+    // Contact shadow where grass meets soil.
     draw_rectangle(
         0.0,
         baseline,
         screen_width(),
-        screen_height() - baseline,
-        DIRT,
+        (0.5 * sc).max(2.0),
+        darken(DIRT, 0.35),
     );
     // Craters.
     for cr in &state.craters {
@@ -350,7 +440,7 @@ pub(super) fn draw_god_rays(state: &GameState, shake: Vec2) {
             sun,
             sun + dir * reach + perp * half,
             sun + dir * reach - perp * half,
-            Color::new(1.0, 0.93, 0.78, 0.03 + 0.02 * h),
+            Color::new(1.0, 0.93, 0.78, 0.05 + 0.03 * h),
         );
     }
 }
@@ -358,8 +448,16 @@ pub(super) fn draw_god_rays(state: &GameState, shake: Vec2) {
 /// Subtle frame shading: nested dark bands on each edge, drawn after the
 /// world and under the HUD — sells the painted-tableau framing.
 pub(super) fn draw_vignette() {
+    // Six feathered stops instead of three hard bands: no visible step.
     let (w, h) = (screen_width(), screen_height());
-    for (band, a) in [(110.0_f32, 0.045), (60.0, 0.06), (28.0, 0.08)] {
+    for (band, a) in [
+        (150.0_f32, 0.03),
+        (110.0, 0.035),
+        (78.0, 0.04),
+        (52.0, 0.05),
+        (30.0, 0.06),
+        (14.0, 0.07),
+    ] {
         let c = Color::new(0.06, 0.04, 0.1, a);
         draw_rectangle(0.0, 0.0, w, band, c);
         draw_rectangle(0.0, h - band, w, band, c);

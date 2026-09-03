@@ -64,13 +64,28 @@ fn hp_color(f: f32) -> Color {
     }
 }
 
+/// Parchment card with a soft drop shadow + dark keyline: one helper so
+/// every HUD plate (HP, last-shots, mute) shares the same depth instead
+/// of flat unbordered rects.
+fn panel(x: f32, y: f32, w: f32, h: f32, fill: Color) {
+    draw_rectangle(x + 3.0, y + 3.0, w, h, Color::new(0.05, 0.03, 0.08, 0.35));
+    draw_rectangle(x, y, w, h, fill);
+    draw_rectangle(x, y, w, 2.0, Color::new(1.0, 0.98, 0.92, 0.5));
+    let edge = Color::new(0.18, 0.14, 0.11, 0.9);
+    draw_rectangle(x, y, w, 1.5, edge);
+    draw_rectangle(x, y + h - 1.5, w, 1.5, edge);
+    draw_rectangle(x, y, 1.5, h, edge);
+    draw_rectangle(x + w - 1.5, y, 1.5, h, edge);
+}
+
 pub(super) fn draw_ui(state: &GameState, muted: bool, font: Option<&macroquad::text::Font>) {
     let (w, h) = (screen_width(), screen_height());
     // Player HP bar, top-left.
-    draw_rectangle(24.0, 24.0, 220.0, 20.0, PARCHMENT);
+    panel(24.0, 24.0, 220.0, 20.0, PARCHMENT);
     let f = (state.player.hp / 100.0).clamp(0.0, 1.0);
     draw_rectangle(26.0, 26.0, 216.0 * f, 16.0, hp_color(f));
-    txt("CANNON", 24.0, 60.0, 22, INK, font);
+    // Gloss line across the fill so the bar reads as glass, not paint.
+    draw_rectangle(26.0, 26.0, 216.0 * f, 4.0, Color::new(1.0, 1.0, 1.0, 0.25));
     if state.player.reload > 0.0 {
         txt(
             &format!("reloading {:.1}s", state.player.reload),
@@ -100,7 +115,7 @@ pub(super) fn draw_ui(state: &GameState, muted: bool, font: Option<&macroquad::t
         } else {
             0.0
         };
-        draw_rectangle(w - 24.0 - 172.0, 46.0, 172.0, 10.0, PARCHMENT);
+        panel(w - 24.0 - 172.0, 46.0, 172.0, 10.0, PARCHMENT);
         draw_rectangle(w - 24.0 - 170.0, 48.0, 168.0 * kf, 6.0, hp_color(kf));
     }
     // Wind banner, top-center.
@@ -130,12 +145,12 @@ pub(super) fn draw_ui(state: &GameState, muted: bool, font: Option<&macroquad::t
         let panel_h = 24.0 + 20.0 * state.last_ranges.len() as f32;
         let x0 = w - 24.0 - panel_w;
         let y0 = h - 24.0 - panel_h;
-        draw_rectangle(
+        panel(
             x0,
             y0,
             panel_w,
             panel_h,
-            Color::new(PARCHMENT.r, PARCHMENT.g, PARCHMENT.b, 0.85),
+            Color::new(PARCHMENT.r, PARCHMENT.g, PARCHMENT.b, 0.88),
         );
         txt("LAST SHOTS", x0 + 10.0, y0 + 18.0, 16, INK, font);
         for (i, r) in state.last_ranges.iter().enumerate() {
@@ -160,12 +175,12 @@ pub(super) fn draw_ui(state: &GameState, muted: bool, font: Option<&macroquad::t
 /// silent, "MUTE" while audible.
 fn draw_mute_button(muted: bool, font: Option<&macroquad::text::Font>) {
     let r = mute_button_rect();
-    draw_rectangle(
+    panel(
         r.x,
         r.y,
         r.w,
         r.h,
-        Color::new(PARCHMENT.r, PARCHMENT.g, PARCHMENT.b, 0.85),
+        Color::new(PARCHMENT.r, PARCHMENT.g, PARCHMENT.b, 0.88),
     );
     txt_centered(
         if muted { "UNMUTE" } else { "MUTE" },
