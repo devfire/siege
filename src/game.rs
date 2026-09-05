@@ -13,6 +13,11 @@ use crate::world::{self, Crater, Segment, SegmentKind};
 use std::collections::VecDeque;
 
 const AOE_R: f32 = 3.2;
+/// Blast proximity (m) that obliterates a defender outright. Narrower
+/// than [`AOE_R`]: stone shrugs off a near miss, people do not — a
+/// runner inside this radius of the chest bursts regardless of whether
+/// the wall beneath holds.
+const GIB_R: f32 = 2.6;
 const SEG_DMG: f32 = 10.0;
 const CANNON_DMG: f32 = 60.0;
 const RELOAD: f32 = 1.0;
@@ -198,8 +203,12 @@ pub struct GameState {
     pub ai: ai::DefenderAi,
     pub balls: Vec<Ball>,
     pub particles: Particles,
-    /// Defenders flung off collapsing walls (tumble, bounce, fade).
+    /// Defenders flung off collapsing walls or blown apart by close
+    /// blasts (tumble, bounce, settle, fade).
     pub fallers: Fallers,
+    /// Keep gun-crew slots vacated — `true` marks a crewman gibbed by a
+    /// blast; the keep falling takes whoever is left.
+    pub keep_crew_gone: [bool; 2],
     pub segments: Vec<Segment>,
     pub craters: VecDeque<Crater>,
     pub wind: Wind,
@@ -266,6 +275,7 @@ impl GameState {
             last_ranges: VecDeque::new(),
             hurt: 0.0,
             end_t: 0.0,
+            keep_crew_gone: [false, false],
             sim_acc: 0.0,
         }
     }
@@ -549,35 +559,14 @@ impl GameState {
             });
             self.particles.spawn_dust(at);
         }
-        let mut fell = false;
-        let mut flung: Vec<usize> = Vec::new();
-        for (ix, seg) in self.segments.iter_mut().enumerate() {
-            if !seg.alive() {
-                continue;
-            }
-            if let Some(c) = physics::hit(
-                at,
-                AOE_R,
-                &Obstacle {
-                    x0: seg.x0,
-                    y0: seg.y0,
-                    w: seg.w,
-                    h: seg.h,
-                },
-            ) {
-                let dmg = SEG_DMG * (1.0 - (c - at).length() / AOE_R).max(0.0);
-                seg.hp = (seg.hp - dmg).max(0.0);
-                if seg.hp <= 0.0 {
-                    fell = true;
-                    flung.push(ix);
-                }
-            }
-        }
-        // The wall-top runners are thrown from where they stood.
+        let (fell, flung, keep_fell) = self.damage_segments(at);
+        // The wall-top runners still standing are thrown from where they
+        // stood; the gibbed slots are already gone.
         for ix in flung {
             self.fallers
                 .fling_wall(&self.segments[ix], ix, at, self.t, &mut self.rng);
         }
+        self.gib_keep_crew(at, keep_fell);
         if fell {
             audio.crumble(near);
         }
@@ -624,6 +613,79 @@ impl GameState {
                 self.end_t = 0.0;
                 audio.defeat();
             }
+        }
+    }
+
+    /// `AoE` damage to every live segment the blast reaches, plus the
+    /// runner toll: anyone inside [`GIB_R`] of the chest is obliterated
+    /// on the spot — whether or not the wall beneath holds. Returns
+    /// (any segment fell, indices of segments destroyed, keep fell).
+    fn damage_segments(&mut self, at: V2) -> (bool, Vec<usize>, bool) {
+        let mut fell = false;
+        let mut flung: Vec<usize> = Vec::new();
+        let mut keep_fell = false;
+        for (ix, seg) in self.segments.iter_mut().enumerate() {
+            if !seg.alive() {
+                continue;
+            }
+            if let Some(c) = physics::hit(
+                at,
+                AOE_R,
+                &Obstacle {
+                    x0: seg.x0,
+                    y0: seg.y0,
+                    w: seg.w,
+                    h: seg.h,
+                },
+            ) {
+                let dmg = SEG_DMG * (1.0 - (c - at).length() / AOE_R).max(0.0);
+                seg.hp = (seg.hp - dmg).max(0.0);
+                if seg.hp <= 0.0 {
+                    fell = true;
+                    if seg.kind == SegmentKind::Keep {
+                        keep_fell = true;
+                    }
+                    flung.push(ix);
+                }
+                // Runners near the burst are obliterated; the rest ride
+                // the wall down (fling_wall skips the vacated slots).
+                let top = seg.y0 + seg.h;
+                for k in 0..world::runner_count(seg) {
+                    if (seg.gone & (1_u8 << k)) != 0 {
+                        continue;
+                    }
+                    let (rx, dir, _) = world::runner_state(seg, ix, k, self.t);
+                    let chest = V2 {
+                        x: rx,
+                        y: top + 1.1,
+                    };
+                    if (chest - at).length() <= GIB_R {
+                        seg.gone |= 1_u8 << k;
+                        self.fallers
+                            .gib_defender(V2 { x: rx, y: top }, dir, at, &mut self.rng);
+                        self.particles.spawn_gore(chest, (rx - at.x).signum());
+                    }
+                }
+            }
+        }
+        (fell, flung, keep_fell)
+    }
+
+    /// Keep gun crew: a close blast takes a man even while the keep
+    /// stands; the keep falling takes the rest.
+    fn gib_keep_crew(&mut self, at: V2, keep_fell: bool) {
+        let victims: Vec<usize> = (0..self.keep_crew_gone.len())
+            .filter(|&k| !self.keep_crew_gone[k])
+            .collect();
+        for k in victims {
+            let foot = world::keep_crew_foot(k);
+            let chest = foot + V2 { x: 0.0, y: 1.1 };
+            if !keep_fell && (chest - at).length() > GIB_R {
+                continue;
+            }
+            self.keep_crew_gone[k] = true;
+            self.fallers.gib_defender(foot, -1.0, at, &mut self.rng);
+            self.particles.spawn_gore(chest, (foot.x - at.x).signum());
         }
     }
 }
@@ -689,4 +751,61 @@ fn contact(prev: V2, ball: &Ball, segments: &[Segment], keep_alive: bool) -> Opt
         h: 1.6,
     };
     physics::hit(p, BALL_R, &o).map(|c| (c, false))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::fallers::Part;
+
+    /// A blast on a runner's chest obliterates him even though the wall
+    /// beneath survives; a blast far below leaves everyone patrolling.
+    #[test]
+    fn close_blast_gibs_runner_whose_wall_holds() {
+        let mut st = GameState::new(Rng::seed(42));
+        let ix = st
+            .segments
+            .iter()
+            .position(|s| s.kind == SegmentKind::Tower)
+            .expect("castle has a tower");
+
+        // Detonate low on the wall face: in AOE of the stone, far from
+        // every parapet runner.
+        let (fell, flung, _) = st.damage_segments(V2 { x: 155.0, y: 8.0 });
+        assert!(!fell, "one blast must not fell a 130 hp tower");
+        assert!(flung.is_empty());
+        assert!(st.fallers.list.is_empty(), "nobody was close enough to gib");
+        assert_eq!(st.segments[ix].gone, 0);
+
+        // Detonate on a runner's exact chest: he bursts, the tower holds.
+        let (rx, _dir, _seed) = world::runner_state(&st.segments[ix], ix, 0, st.t);
+        let top = st.segments[ix].y0 + st.segments[ix].h;
+        let chest = V2 {
+            x: rx,
+            y: top + 1.1,
+        };
+        let (fell, flung, _) = st.damage_segments(chest);
+        assert!(!fell, "the tower still holds");
+        assert!(flung.is_empty());
+        assert_ne!(st.segments[ix].gone & 1, 0, "runner 0's slot is vacated");
+        assert!(
+            st.fallers.list.iter().any(|f| f.part != Part::Body),
+            "the gibbed runner burst into parts"
+        );
+    }
+
+    /// The keep crew is obliterated when the keep falls, and a distant
+    /// blast takes nobody while it stands.
+    #[test]
+    fn keep_crew_gibbed_when_keep_falls() {
+        let mut st = GameState::new(Rng::seed(3));
+        st.gib_keep_crew(V2 { x: 200.0, y: 0.0 }, false);
+        assert_eq!(st.keep_crew_gone, [false, false], "blast far from the keep");
+        assert!(st.fallers.list.is_empty());
+
+        st.gib_keep_crew(V2 { x: 200.0, y: 0.0 }, true);
+        assert_eq!(st.keep_crew_gone, [true, true]);
+        assert_eq!(st.fallers.list.len(), 14, "two crewmen × seven parts");
+        assert!(st.fallers.list.iter().all(|f| f.part != Part::Body));
+    }
 }

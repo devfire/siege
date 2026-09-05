@@ -1,6 +1,7 @@
 //! Living wall patrols and gun crews. Decorative poses use simulation
 //! time and projectile proximity only; collapsed segments lose their
-//! guards immediately, with their ragdolls still drawn by `Fallers`.
+//! guards immediately — gibbed by a close blast or flung whole by
+//! `Fallers`, which also draws the flying pieces.
 #![allow(
     clippy::cast_precision_loss,
     clippy::cast_possible_truncation,
@@ -9,7 +10,7 @@
 )]
 
 use super::{scale, w2s};
-use crate::fallers::Fallers;
+use crate::fallers::{Faller, Fallers, Part};
 use crate::game::GameState;
 use crate::physics::V2;
 use crate::world;
@@ -103,6 +104,10 @@ fn draw_wall_runners(state: &GameState, w: &dyn Fn(V2) -> Vec2) {
         }
         let top = seg.y0 + seg.h;
         for k in 0..world::runner_count(seg) {
+            // Vacated: this runner was gibbed by an earlier blast.
+            if (seg.gone & (1_u8 << k)) != 0 {
+                continue;
+            }
             let (rx, dir, seed) = world::runner_state(seg, ix, k, state.t);
             let foot = V2 { x: rx, y: top };
             let duck = threat(state, foot);
@@ -145,7 +150,7 @@ fn draw_wall_runners(state: &GameState, w: &dyn Fn(V2) -> Vec2) {
 }
 
 fn draw_player_crew(state: &GameState, w: &dyn Fn(V2) -> Vec2) {
-    draw_crew(state, w, false);
+    draw_crew(state, w, false, [false, false]);
 }
 
 fn draw_keep_crew(state: &GameState, w: &dyn Fn(V2) -> Vec2) {
@@ -154,13 +159,13 @@ fn draw_keep_crew(state: &GameState, w: &dyn Fn(V2) -> Vec2) {
         .iter()
         .any(|seg| seg.kind == world::SegmentKind::Keep && seg.alive())
     {
-        draw_crew(state, w, true);
+        draw_crew(state, w, true, state.keep_crew_gone);
     }
 }
 
 /// Both crews keep clear of the carriage, work their rammer during reload,
 /// raise a fuse torch, and cover their heads during near misses or recoil.
-fn draw_crew(state: &GameState, w: &dyn Fn(V2) -> Vec2, defending: bool) {
+fn draw_crew(state: &GameState, w: &dyn Fn(V2) -> Vec2, defending: bool, gone: [bool; 2]) {
     let s = scale();
     let (pivot, dir, reload, fuse, recoil, tunic) = if defending {
         (
@@ -181,15 +186,18 @@ fn draw_crew(state: &GameState, w: &dyn Fn(V2) -> Vec2, defending: bool) {
             LEATHER,
         )
     };
-    for k in 0..2 {
-        let x = pivot.x - dir * (4.1 + k as f32 * 1.8);
-        let foot = V2 {
-            x,
-            y: if defending {
-                world::KEEP_TOP
-            } else {
-                world::ground_height(x)
-            },
+    for (k, &vacated) in gone.iter().enumerate() {
+        if vacated {
+            continue; // gibbed by an earlier blast
+        }
+        let foot = if defending {
+            world::keep_crew_foot(k)
+        } else {
+            let x = pivot.x - dir * (4.1 + k as f32 * 1.8);
+            V2 {
+                x,
+                y: world::ground_height(x),
+            }
         };
         let phase = state.t * 3.0 + k as f32 * 2.1;
         let duck = threat(state, foot).max(recoil.clamp(0.0, 1.0) * 0.9);
@@ -532,9 +540,10 @@ fn draw_figure_head(s: f32, head: Vec2, dir: f32) {
     );
 }
 
-/// Flung defenders from `Fallers`: tumbling ragdolls that ease flat and
-/// fade where they landed. Drawn after the live runners so the bodies
-/// lay over the fresh rubble.
+/// Flung defenders from `Fallers`: whole tumbling ragdolls thrown by a
+/// wall collapse, and the flying chunks of defenders gibbed by a close
+/// blast — both ease flat and fade where they land. Drawn after the
+/// live runners so the bodies lay over the fresh rubble.
 fn draw_fallers(fs: &Fallers, w: &dyn Fn(V2) -> Vec2) {
     let s = scale();
     for f in &fs.list {
@@ -548,35 +557,118 @@ fn draw_fallers(fs: &Fallers, w: &dyn Fn(V2) -> Vec2) {
         };
         let fig = Color::new(FIG.r, FIG.g, FIG.b, fade);
         let liv = Color::new(LIVERY.r, LIVERY.g, LIVERY.b, fade);
-        // Torso in livery, helmeted head along the body axis.
-        let t0 = w(f.pos - body * 0.28);
-        let t1 = w(f.pos + body * 0.28);
-        draw_line(t0.x, t0.y, t1.x, t1.y, (0.13 * s).max(2.0), liv);
-        let head = w(f.pos + body * 0.45);
-        draw_circle(head.x, head.y, (0.11 * s).max(1.8), fig);
-        draw_circle(
-            head.x + body.x * 0.03 * s,
-            head.y + body.y * 0.03 * s,
-            (0.05 * s).max(1.0),
-            Color::new(HELM.r, HELM.g, HELM.b, fade),
-        );
-        // Flailing limbs: legs from the hip end, arms from the shoulder
-        // end, wiggling with the tumble phase.
+        let helm = Color::new(HELM.r, HELM.g, HELM.b, fade);
+        let skin = Color::new(SKIN.r, SKIN.g, SKIN.b, fade);
         let wig = (f.life * 13.0).sin() * 0.25;
-        for (along, off) in [
-            (-0.22_f32, std::f32::consts::PI + 0.6 + wig),
-            (-0.22_f32, std::f32::consts::PI - 0.6 + wig),
-            (0.18_f32, 2.4 - wig),
-            (0.18_f32, -2.4 - wig),
-        ] {
-            let limb = V2 {
-                x: off.cos(),
-                y: off.sin(),
-            };
-            let hip = w(f.pos + body * along);
-            let tip = w(f.pos + body * along + limb * 0.34);
-            draw_line(hip.x, hip.y, tip.x, tip.y, (0.08 * s).max(1.5), fig);
+        match f.part {
+            Part::Body => draw_whole_faller(f, w, s, body, wig),
+            // A severed head keeps its helmet; the tumble axis is its gaze.
+            Part::Head => {
+                let center = w(f.pos);
+                draw_circle(center.x, center.y, (0.14 * s).max(1.6), fig);
+                draw_circle(
+                    center.x + body.x * 0.04 * s,
+                    center.y + body.y * 0.04 * s,
+                    (0.1 * s).max(1.2),
+                    skin,
+                );
+                draw_circle(
+                    center.x - body.x * 0.05 * s,
+                    center.y - body.y * 0.05 * s - 0.02 * s,
+                    (0.09 * s).max(1.2),
+                    helm,
+                );
+            }
+            // Steel bowl spinning off the blast, brim across the axis.
+            Part::Helmet => {
+                let center = w(f.pos);
+                draw_circle(center.x, center.y, (0.15 * s).max(1.6), helm);
+                draw_circle(center.x, center.y, (0.1 * s).max(1.2), fig);
+                let perp = V2 {
+                    x: -body.y,
+                    y: body.x,
+                };
+                let rim0 = w(f.pos - perp * 0.17);
+                let rim1 = w(f.pos + perp * 0.17);
+                draw_line(rim0.x, rim0.y, rim1.x, rim1.y, (0.05 * s).max(1.0), fig);
+            }
+            // Livery torso with its belt.
+            Part::Torso => {
+                let t0 = w(f.pos - body * 0.2);
+                let t1 = w(f.pos + body * 0.2);
+                draw_line(t0.x, t0.y, t1.x, t1.y, (0.16 * s).max(2.0), liv);
+                let belt = w(f.pos - body * 0.1);
+                draw_circle(belt.x, belt.y, (0.05 * s).max(1.2), fig);
+            }
+            Part::Arm | Part::Leg => {
+                let arm = matches!(f.part, Part::Arm);
+                let swing = if arm { 0.9 + wig } else { -0.9 - wig };
+                let limb = V2 {
+                    x: (ang + swing).cos(),
+                    y: (ang + swing).sin(),
+                };
+                let root = f.pos - body * 0.1;
+                let tip = root + limb * 0.3;
+                let root_px = w(root);
+                let tip_px = w(tip);
+                draw_line(
+                    root_px.x,
+                    root_px.y,
+                    tip_px.x,
+                    tip_px.y,
+                    (0.08 * s).max(1.5),
+                    fig,
+                );
+                if arm {
+                    let hand = w(tip + limb * 0.03);
+                    draw_circle(hand.x, hand.y, (0.05 * s).max(1.0), skin);
+                } else {
+                    // Boot: short stroke across the foot.
+                    let toe = V2 {
+                        x: -limb.y,
+                        y: limb.x,
+                    };
+                    let boot0 = w(tip - toe * 0.07);
+                    let boot1 = w(tip + toe * 0.07);
+                    draw_line(boot0.x, boot0.y, boot1.x, boot1.y, (0.07 * s).max(1.2), fig);
+                }
+            }
         }
+    }
+}
+
+/// One whole ragdoll: livery torso, helmeted head along the body axis,
+/// and limbs flailing with the tumble phase.
+fn draw_whole_faller(f: &Faller, w: &dyn Fn(V2) -> Vec2, s: f32, body: V2, wig: f32) {
+    let fade = (f.life / 0.8).clamp(0.0, 1.0);
+    let fig = Color::new(FIG.r, FIG.g, FIG.b, fade);
+    let liv = Color::new(LIVERY.r, LIVERY.g, LIVERY.b, fade);
+    let helm = Color::new(HELM.r, HELM.g, HELM.b, fade);
+    let t0 = w(f.pos - body * 0.28);
+    let t1 = w(f.pos + body * 0.28);
+    draw_line(t0.x, t0.y, t1.x, t1.y, (0.13 * s).max(2.0), liv);
+    let head = w(f.pos + body * 0.45);
+    draw_circle(head.x, head.y, (0.11 * s).max(1.8), fig);
+    draw_circle(
+        head.x + body.x * 0.03 * s,
+        head.y + body.y * 0.03 * s,
+        (0.05 * s).max(1.0),
+        helm,
+    );
+    // Legs from the hip end, arms from the shoulder end.
+    for (along, off) in [
+        (-0.22_f32, std::f32::consts::PI + 0.6 + wig),
+        (-0.22_f32, std::f32::consts::PI - 0.6 + wig),
+        (0.18_f32, 2.4 - wig),
+        (0.18_f32, -2.4 - wig),
+    ] {
+        let limb = V2 {
+            x: off.cos(),
+            y: off.sin(),
+        };
+        let hip = w(f.pos + body * along);
+        let tip = w(f.pos + body * along + limb * 0.34);
+        draw_line(hip.x, hip.y, tip.x, tip.y, (0.08 * s).max(1.5), fig);
     }
 }
 

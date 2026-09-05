@@ -51,6 +51,9 @@ pub struct Segment {
     pub hp: f32,
     pub max_hp: f32,
     pub kind: SegmentKind,
+    /// Runner slots vacated (gibbed or flung): bit `k` set means runner
+    /// `k` no longer patrols this segment.
+    pub gone: u8,
 }
 
 impl Segment {
@@ -93,6 +96,7 @@ pub fn castle_segments() -> Vec<Segment> {
             hp,
             max_hp: hp,
             kind,
+            gone: 0,
         }
     }
     vec![
@@ -176,6 +180,17 @@ pub fn runner_state(seg: &Segment, ix: usize, k: u32, t: f32) -> (f32, f32, f32)
         if lap < 0.5 { 1.0 } else { -1.0 },
         h1,
     )
+}
+/// Keep gun-crew `k` (0 or 1) standing spot on the keep deck. Shared by
+/// the crew drawing and blast gibbing so both agree on where a man
+/// stands, exactly like `runner_state` does for wall runners.
+#[must_use]
+#[allow(clippy::cast_precision_loss)] // crew slot index, 0 or 1
+pub fn keep_crew_foot(k: usize) -> V2 {
+    V2 {
+        x: DEFENDER_PIVOT_X + 4.1 + k as f32 * 1.8,
+        y: KEEP_TOP,
+    }
 }
 
 /// Ground scar from an impact. Capped at 24, oldest dropped.

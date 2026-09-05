@@ -1,4 +1,4 @@
-//! Bounded smoke, fire, shockwaves, debris, sparks, dust, and wind leaves.
+//! Bounded smoke, fire, shockwaves, debris, sparks, dust, gore, and wind leaves.
 //!
 //! Cool particles sit behind luminous fire and spark trails. All effect
 //! animation follows particle age, so pausing freezes every layer together.
@@ -25,8 +25,9 @@ pub enum PKind {
     Fireball,
     Shockwave,
     Muzzle,
+    /// Blood droplets and hanging mist where a defender was gibbed.
+    Blood,
 }
-
 pub struct Particle {
     pub pos: V2,
     pub vel: V2,
@@ -247,6 +248,52 @@ impl Particles {
         self.spawn_dust(at);
     }
 
+    /// Blood mist and droplets where a defender was blown apart; `away`
+    /// (±1) biases the spray direction. Deterministic index patterns,
+    /// never gameplay RNG — like every spawn here.
+    pub fn spawn_gore(&mut self, at: V2, away: f32) {
+        for i in 0..12u16 {
+            let t = f32::from(i) / 12.0;
+            let j = f32::from((i * 31) % 13) / 13.0 - 0.5;
+            self.push(Particle {
+                pos: at
+                    + V2 {
+                        x: j * 0.3,
+                        y: j.abs() * 0.2,
+                    },
+                vel: V2 {
+                    x: away * (1.5 + 7.0 * t) + j * 4.0,
+                    y: (2.0 + 5.5 * (1.0 - t * 0.4)) * (0.6 + j.abs()),
+                },
+                life: 0.55 + 0.35 * t,
+                max_life: 0.9,
+                size: 0.08 + 0.07 * t,
+                spin: 0.0,
+                kind: PKind::Blood,
+            });
+        }
+        // Slow dark mist hanging where the body was — briefer than smoke.
+        for i in 0..3u16 {
+            let j = f32::from(i) - 1.0;
+            self.push(Particle {
+                pos: at
+                    + V2 {
+                        x: j * 0.25,
+                        y: 0.1,
+                    },
+                vel: V2 {
+                    x: away * 0.8 + j * 0.6,
+                    y: 0.9 + 0.3 * j.abs(),
+                },
+                life: 0.5,
+                max_life: 0.5,
+                size: 0.45 + 0.2 * j.abs(),
+                spin: 0.0,
+                kind: PKind::Blood,
+            });
+        }
+    }
+
     /// Ground-hugging dust ring for a ground impact.
     pub fn spawn_dust(&mut self, at: V2) {
         for i in 0..12u16 {
@@ -361,6 +408,18 @@ impl Particles {
                         }
                     }
                 }
+                PKind::Blood => {
+                    p.vel.y -= G * dt;
+                    p.vel *= (1.0 - 0.5 * dt).max(0.0);
+                    let gh = world::ground_height(p.pos.x) + 0.06;
+                    if p.pos.y <= gh && p.vel.y < 0.0 {
+                        // Splat: stick where it lands and fade fast.
+                        p.vel = V2::default();
+                        p.life = p.life.min(0.3);
+                        p.max_life = p.max_life.max(0.3);
+                        p.pos.y = gh;
+                    }
+                }
             }
             p.pos += p.vel * dt;
         }
@@ -376,7 +435,7 @@ impl Particles {
                 let particle_layer = match p.kind {
                     PKind::Smoke | PKind::Dust => 0,
                     PKind::Fireball if p.max_life - p.life >= 0.85 => 0,
-                    PKind::Debris | PKind::Leaf | PKind::Shockwave => 1,
+                    PKind::Debris | PKind::Leaf | PKind::Shockwave | PKind::Blood => 1,
                     PKind::Fireball | PKind::Muzzle => 2,
                     PKind::Flash | PKind::Spark => 3,
                 };
@@ -460,6 +519,21 @@ impl Particles {
                         ..Default::default()
                     },
                 );
+            }
+            PKind::Blood => {
+                if pt.size < 0.3 {
+                    // Droplet, or a landed splatter dot.
+                    draw_circle(
+                        sx,
+                        sy,
+                        pt.size * scale,
+                        Color::new(0.47, 0.06, 0.08, frac * 0.95),
+                    );
+                } else {
+                    // Hanging mist, thinning as it spreads.
+                    let r = pt.size * scale * (1.0 + (1.0 - frac) * 0.8);
+                    draw_circle(sx, sy, r, Color::new(0.42, 0.05, 0.07, frac * frac * 0.30));
+                }
             }
         }
     }
