@@ -15,14 +15,16 @@ use crate::rng::Rng;
 use crate::world;
 use macroquad::color::Color;
 use macroquad::math::{Vec2, vec2};
-use macroquad::shapes::{draw_circle, draw_ellipse, draw_line, draw_rectangle, draw_triangle};
+use macroquad::shapes::{
+    draw_circle, draw_ellipse, draw_line, draw_poly, draw_rectangle, draw_triangle,
+};
 use macroquad::window::{screen_height, screen_width};
 
-const SKY_MID: Color = Color::from_hex(0x7A_3B_5E);
-const SKY_HOR: Color = Color::from_hex(0xF2_A6_5A);
+const SKY_MID: Color = Color::from_hex(0x8B_83_91);
+const SKY_HOR: Color = Color::from_hex(0xF2_BB_80);
 const SUN_C: Color = Color::from_hex(0xFF_E8_B0);
-const MOUNT_FAR: Color = Color::from_hex(0x3E_2F_55);
-const MOUNT_NEAR: Color = Color::from_hex(0x4F_3B_63);
+const MOUNT_FAR: Color = Color::from_hex(0x6B_78_86);
+const MOUNT_NEAR: Color = Color::from_hex(0x43_62_69);
 const TREELINE: Color = Color::from_hex(0x43_58_43);
 const GRASS_TOP: Color = Color::from_hex(0x6F_A3_5C);
 const DIRT: Color = Color::from_hex(0x7A_5B_3F);
@@ -31,10 +33,8 @@ const CRATER_C: Color = Color::from_hex(0x4A_35_27);
 pub(super) fn draw_sky(shake: Vec2) {
     let (_, oy) = origin();
     let horizon = w2s(V2 { x: 0.0, y: 0.0 }).y + shake.y;
-    // 64 bands kill the stripe steps the old 26-band ramp showed on
-    // large windows; a whisper of hash dither breaks up the remaining
-    // 8-bit gradient contouring without visible noise.
-    let bands = 64u16;
+    // Fine bands keep the dawn gradient smooth on large displays.
+    let bands = 256u16;
     let band_h = (horizon - oy) / f32::from(bands);
     for i in 0..bands {
         let t = f32::from(i) / f32::from(bands - 1);
@@ -44,9 +44,9 @@ pub(super) fn draw_sky(shake: Vec2) {
             mix(SKY_TOP, SKY_MID, u * u * (3.0 - 2.0 * u))
         } else {
             let u = (t - 0.55) / 0.45;
-            mix(SKY_MID, SKY_HOR, u.sqrt())
+            mix(SKY_MID, SKY_HOR, u * u * (3.0 - 2.0 * u))
         };
-        let dither = (hash2(u32::from(i), 77) - 0.5) * 0.012;
+        let dither = (hash2(u32::from(i), 77) - 0.5) * 0.002;
         col.r = (col.r + dither).clamp(0.0, 1.0);
         col.g = (col.g + dither).clamp(0.0, 1.0);
         col.b = (col.b + dither).clamp(0.0, 1.0);
@@ -79,26 +79,35 @@ pub(super) fn draw_sky(shake: Vec2) {
 pub(super) fn draw_sun(shake: Vec2) {
     let s = scale();
     let c = w2s(V2 { x: 60.0, y: 78.0 }) + shake;
-    // Wide-to-tight falloff: vast faint bloom, mid glow, hot disc, white core.
-    for (rm, alpha) in [(26.0, 0.04), (16.0, 0.07), (10.0, 0.13), (6.5, 0.22)] {
-        draw_circle(
+    // Many faint shells make a soft bloom instead of visible polygon rings.
+    for i in (0..32u16).rev() {
+        let t = f32::from(i) / 31.0;
+        let radius = (4.0 + 22.0 * t) * s;
+        draw_poly(
             c.x,
             c.y,
-            rm * s,
-            Color::new(SUN_C.r, SUN_C.g, SUN_C.b, alpha),
+            64,
+            radius,
+            0.0,
+            Color::new(1.0, 0.83, 0.53, 0.025 * (1.0 - t)),
         );
     }
-    draw_circle(c.x, c.y, 4.0 * s, SUN_C);
-    draw_circle(c.x, c.y, 3.1 * s, Color::new(1.0, 0.96, 0.86, 1.0));
-    draw_circle(c.x, c.y, 2.1 * s, Color::new(1.0, 1.0, 0.96, 1.0));
-    // Horizontal dawn streak through the disc.
+    draw_poly(c.x, c.y, 64, 4.0 * s, 0.0, SUN_C);
+    draw_poly(
+        c.x,
+        c.y,
+        64,
+        3.75 * s,
+        0.0,
+        Color::new(1.0, 0.96, 0.83, 1.0),
+    );
     draw_ellipse(
         c.x,
         c.y,
-        9.5 * s,
-        0.9 * s,
+        10.0 * s,
+        0.3 * s,
         0.0,
-        Color::new(1.0, 0.85, 0.6, 0.18),
+        Color::new(1.0, 0.86, 0.62, 0.10),
     );
 }
 pub(super) fn draw_clouds(state: &GameState, shake: Vec2) {
@@ -202,7 +211,7 @@ fn mountain_layer(shake: Vec2, r: &Ridge) {
         prev = Some(pt);
         ix += 1;
     }
-    let hl = Color::new(1.0, 0.72, 0.5, 0.28);
+    let hl = Color::new(1.0, 0.82, 0.65, 0.09);
     for k in 1..n {
         draw_line(
             ridge[k - 1].x,

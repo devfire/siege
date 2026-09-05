@@ -1,15 +1,17 @@
-//! Particle system — smoke, debris, sparks, dust, leaves, flash.
+//! Bounded smoke, fire, shockwaves, debris, sparks, dust, and wind leaves.
 //!
-//! Pool capped at 1200 (oldest dropped). Smoke rides the wind and is drawn
-//! last (over balls); debris tumbles with gravity, bounces once on the
-//! ground, then rests half a second and fades. Leaves are the ambient wind
-//! tell, spawning at the upwind field edge.
+//! Cool particles sit behind luminous fire and spark trails. All effect
+//! animation follows particle age, so pausing freezes every layer together.
+//! New blast details use deterministic index patterns, never gameplay RNG.
 
 use crate::physics::V2;
 use crate::rng::Rng;
 use crate::world;
 use macroquad::color::Color;
-use macroquad::shapes::{DrawRectangleParams, draw_circle, draw_line, draw_rectangle_ex};
+use macroquad::math::vec2;
+use macroquad::shapes::{
+    DrawRectangleParams, draw_circle, draw_line, draw_rectangle_ex, draw_triangle,
+};
 use std::collections::VecDeque;
 
 #[derive(Copy, Clone, PartialEq)]
@@ -20,6 +22,9 @@ pub enum PKind {
     Dust,
     Leaf,
     Flash,
+    Fireball,
+    Shockwave,
+    Muzzle,
 }
 
 pub struct Particle {
@@ -30,7 +35,7 @@ pub struct Particle {
     pub size: f32,
     /// Debris tumble rate (rad/s); negative marks the single bounce spent,
     /// zero marks a resting (fading-in-place) chunk. Leaves use it as the
-    /// flutter frequency.
+    /// flutter frequency; fire uses a lobe phase, muzzle blasts an angle.
     pub spin: f32,
     pub kind: PKind,
 }
@@ -53,7 +58,7 @@ impl Particles {
     #[must_use]
     pub fn new() -> Self {
         Self {
-            pool: VecDeque::with_capacity(256),
+            pool: VecDeque::with_capacity(CAP),
         }
     }
 
@@ -66,17 +71,16 @@ impl Particles {
         self.pool.push_back(p);
     }
 
-    /// Muzzle blast: one flash, 10 fast sparks along the barrel, 14 smoke
-    /// puffs that drift with the wind (deterministic fan — no rng).
+    /// Directional flame, sparks, and drifting powder smoke; no RNG draws.
     pub fn spawn_muzzle(&mut self, muzzle: V2, dir: V2) {
         self.push(Particle {
             pos: muzzle + dir * 0.4,
             vel: dir * 2.0,
-            life: 0.08,
-            max_life: 0.08,
-            size: 2.2,
-            spin: 0.0,
-            kind: PKind::Flash,
+            life: 0.32,
+            max_life: 0.32,
+            size: 5.4,
+            spin: dir.y.atan2(dir.x),
+            kind: PKind::Muzzle,
         });
         // Perpendicular for the spark fan.
         let perp = V2 {
@@ -90,8 +94,8 @@ impl Particles {
             self.push(Particle {
                 pos: muzzle + perp * off,
                 vel: dir * speed + perp * (off * 6.0),
-                life: 0.22 + 0.1 * (1.0 - off.abs()),
-                max_life: 0.32,
+                life: 0.42 + 0.1 * (1.0 - off.abs()),
+                max_life: 0.52,
                 size: 0.16,
                 spin: 0.0,
                 kind: PKind::Spark,
@@ -145,18 +149,48 @@ impl Particles {
         }
     }
 
-    /// Impact kit: flash, 16 tumbling debris, 22 smoke, 12 sparks, and a
-    /// ground-hugging dust ring.
+    /// Hot core and pressure ring, then rolling fire, charcoal, and embers.
+    /// Keep the original debris/smoke/spark RNG calls in their original order.
     pub fn spawn_explosion(&mut self, at: V2, rng: &mut Rng) {
         self.push(Particle {
             pos: at + V2 { x: 0.0, y: 0.3 },
             vel: V2::default(),
-            life: 0.1,
-            max_life: 0.1,
-            size: 3.4,
+            life: 0.3,
+            max_life: 0.3,
+            size: 2.7,
             spin: 0.0,
             kind: PKind::Flash,
         });
+        self.push(Particle {
+            pos: at,
+            vel: V2::default(),
+            life: 0.58,
+            max_life: 0.58,
+            size: 8.0,
+            spin: 0.0,
+            kind: PKind::Shockwave,
+        });
+        for i in 0..9u16 {
+            let phase = f32::from(i) * 2.399_963;
+            let spread = 1.0 + f32::from((i * 7) % 5) * 0.24;
+            let life = 1.8 + f32::from((i * 11) % 7) * 0.12;
+            self.push(Particle {
+                pos: at
+                    + V2 {
+                        x: phase.cos() * 0.7,
+                        y: 0.4 + phase.sin() * 0.45,
+                    },
+                vel: V2 {
+                    x: phase.cos() * spread * 3.2,
+                    y: 2.0 + phase.sin().abs() * 3.6,
+                },
+                life,
+                max_life: life,
+                size: 0.95 + spread * 0.45,
+                spin: phase,
+                kind: PKind::Fireball,
+            });
+        }
         for _ in 0..16 {
             let a = rng.range(0.0, std::f32::consts::TAU);
             let s = rng.range(4.0, 14.0);
@@ -201,10 +235,10 @@ impl Particles {
                 pos: at,
                 vel: V2 {
                     x: a.cos() * s,
-                    y: a.sin().abs() * s * 0.5 + 4.0,
+                    y: a.sin() * s * 0.7 + 3.0,
                 },
-                life: rng.range(0.15, 0.35),
-                max_life: 0.35,
+                life: rng.range(0.15, 0.35) + 0.4,
+                max_life: 0.75,
                 size: 0.14,
                 spin: 0.0,
                 kind: PKind::Spark,
@@ -278,7 +312,13 @@ impl Particles {
         for p in &mut self.pool {
             p.life -= dt;
             match p.kind {
-                PKind::Flash => {}
+                PKind::Flash | PKind::Shockwave | PKind::Muzzle => {}
+                PKind::Fireball => {
+                    p.vel *= (1.0 - 1.5 * dt).max(0.0);
+                    p.vel.x += (wind * 0.45 - p.vel.x) * (0.7 * dt).min(1.0);
+                    p.vel.y += 1.8 * dt;
+                    p.size += 0.85 * dt;
+                }
                 PKind::Smoke => {
                     p.vel *= (1.0 - 1.6 * dt).max(0.0);
                     p.vel.x += (wind * 0.6 - p.vel.x) * (1.4 * dt).min(1.0);
@@ -328,57 +368,63 @@ impl Particles {
             .retain(|p| p.life > 0.0 && p.pos.x > -8.0 && p.pos.x < 208.0 && p.pos.y < 120.0);
     }
 
-    /// Two passes: flash/debris/sparks/dust/leaves first, smoke last so it
-    /// hangs over everything at the impact site.
+    /// Dust/smoke, fragments/rings, fire, then hot cores/sparks. No sorting or
+    /// temporary buffers: even a full pool takes only four bounded passes.
     pub fn draw(&self, to_screen: &dyn Fn(V2) -> (f32, f32), scale: f32) {
-        for p in &self.pool {
-            if p.kind == PKind::Smoke {
-                continue;
-            }
-            Self::draw_one(p, to_screen, scale);
-        }
-        for p in &self.pool {
-            if p.kind == PKind::Smoke {
-                Self::draw_one(p, to_screen, scale);
+        for layer in 0..4 {
+            for p in &self.pool {
+                let particle_layer = match p.kind {
+                    PKind::Smoke | PKind::Dust => 0,
+                    PKind::Fireball if p.max_life - p.life >= 0.85 => 0,
+                    PKind::Debris | PKind::Leaf | PKind::Shockwave => 1,
+                    PKind::Fireball | PKind::Muzzle => 2,
+                    PKind::Flash | PKind::Spark => 3,
+                };
+                if particle_layer == layer {
+                    Self::draw_one(p, to_screen, scale);
+                }
             }
         }
     }
 
     fn draw_one(pt: &Particle, to_screen: &dyn Fn(V2) -> (f32, f32), scale: f32) {
         let frac = (pt.life / pt.max_life).clamp(0.0, 1.0);
+        let age = pt.max_life - pt.life;
         let (sx, sy) = to_screen(pt.pos);
         match pt.kind {
             PKind::Flash => {
-                let alpha = frac * 0.9;
-                draw_circle(sx, sy, pt.size * scale, Color::new(1.0, 0.93, 0.72, alpha));
+                let alpha = frac * frac;
+                let radius = pt.size * scale * (1.0 + (1.0 - frac) * 0.35);
                 draw_circle(
                     sx,
                     sy,
-                    pt.size * 0.55 * scale,
-                    Color::new(1.0, 1.0, 0.95, alpha),
+                    radius * 1.6,
+                    Color::new(1.0, 0.38, 0.08, alpha * 0.13),
                 );
+                draw_circle(sx, sy, radius, Color::new(1.0, 0.76, 0.3, alpha * 0.8));
+                draw_circle(sx, sy, radius * 0.55, Color::new(1.0, 1.0, 0.95, alpha));
             }
+            PKind::Shockwave => Self::draw_shockwave(pt, to_screen, scale, frac),
+            PKind::Muzzle => Self::draw_muzzle(pt, to_screen, scale, frac, (sx, sy)),
+            PKind::Fireball => Self::draw_fireball(pt, scale, frac, age, (sx, sy)),
             PKind::Smoke => {
-                let alpha = (frac * frac) * 0.34;
-                let gray = 0.36 + 0.1 * frac;
+                let alpha = (frac * frac) * 0.22;
+                let gray = 0.29 + 0.12 * frac;
                 draw_circle(
                     sx,
                     sy,
                     pt.size * scale,
                     Color::new(gray, gray * 0.96, gray * 0.92, alpha),
                 );
-            }
-            PKind::Spark => {
-                let tail = to_screen(pt.pos - pt.vel * 0.045);
-                draw_line(
-                    sx,
-                    sy,
-                    tail.0,
-                    tail.1,
-                    (0.12 * scale).max(1.0),
-                    Color::new(1.0, 0.72 + 0.2 * frac, 0.3, frac),
+                let roll = age * 0.9 + pt.pos.x * 0.7;
+                draw_circle(
+                    sx + roll.cos() * pt.size * scale * 0.3,
+                    sy - pt.size * scale * 0.22,
+                    pt.size * scale * 0.68,
+                    Color::new(gray + 0.09, gray + 0.07, gray + 0.04, alpha * 0.75),
                 );
             }
+            PKind::Spark => Self::draw_spark(pt, to_screen, scale, frac, (sx, sy)),
             PKind::Dust => {
                 draw_circle(
                     sx,
@@ -409,12 +455,160 @@ impl Particles {
                     size_px * 1.5,
                     size_px,
                     DrawRectangleParams {
-                        rotation: angle.to_degrees(),
+                        rotation: angle,
                         color: Color::new(0.42, 0.39, 0.37, frac.min(1.0)),
                         ..Default::default()
                     },
                 );
             }
         }
+    }
+
+    fn draw_shockwave(pt: &Particle, to_screen: &dyn Fn(V2) -> (f32, f32), scale: f32, frac: f32) {
+        let progress = 1.0 - frac;
+        let radius = pt.size * (1.0 - frac * frac);
+        for i in 0..32u16 {
+            let angle = f32::from(i) * std::f32::consts::TAU / 32.0;
+            let end_angle = angle + std::f32::consts::TAU / 32.0 * 0.84;
+            let start = to_screen(
+                pt.pos
+                    + V2 {
+                        x: angle.cos() * radius,
+                        y: angle.sin() * radius * 0.72,
+                    },
+            );
+            let end = to_screen(
+                pt.pos
+                    + V2 {
+                        x: end_angle.cos() * radius,
+                        y: end_angle.sin() * radius * 0.72,
+                    },
+            );
+            draw_line(
+                start.0,
+                start.1,
+                end.0,
+                end.1,
+                ((0.16 - progress * 0.09) * scale).max(0.7),
+                Color::new(1.0, 0.79, 0.47, frac * frac * 0.65),
+            );
+        }
+    }
+
+    fn draw_muzzle(
+        pt: &Particle,
+        to_screen: &dyn Fn(V2) -> (f32, f32),
+        scale: f32,
+        frac: f32,
+        (sx, sy): (f32, f32),
+    ) {
+        let dir = V2 {
+            x: pt.spin.cos(),
+            y: pt.spin.sin(),
+        };
+        let perp = V2 {
+            x: -dir.y,
+            y: dir.x,
+        };
+        let reach = pt.size * (0.65 + 0.35 * (1.0 - frac));
+        let width = 0.8 * frac + 0.15;
+        for i in 0..3u8 {
+            let side = f32::from(i) - 1.0;
+            let tip =
+                to_screen(pt.pos + dir * (reach * (1.0 - side.abs() * 0.25)) + perp * (side * 0.9));
+            let left = to_screen(pt.pos + perp * (width + side * 0.25));
+            let right = to_screen(pt.pos - perp * (width - side * 0.25));
+            draw_triangle(
+                vec2(left.0, left.1),
+                vec2(right.0, right.1),
+                vec2(tip.0, tip.1),
+                Color::new(1.0, 0.42 + 0.15 * frac, 0.06, frac * 0.62),
+            );
+        }
+        let tip = to_screen(pt.pos + dir * (reach * 0.7));
+        let left = to_screen(pt.pos + perp * width * 0.5);
+        let right = to_screen(pt.pos - perp * width * 0.5);
+        draw_triangle(
+            vec2(left.0, left.1),
+            vec2(right.0, right.1),
+            vec2(tip.0, tip.1),
+            Color::new(1.0, 0.96, 0.68, frac),
+        );
+        draw_circle(
+            sx,
+            sy,
+            width * scale * 0.7,
+            Color::new(1.0, 0.98, 0.8, frac),
+        );
+    }
+
+    fn draw_fireball(pt: &Particle, scale: f32, frac: f32, age: f32, (sx, sy): (f32, f32)) {
+        let heat = (1.0 - age / 0.85).clamp(0.0, 1.0);
+        let fade = (frac * 2.4).min(1.0);
+        let swell = (age * 8.0).min(1.0);
+        let radius = pt.size * scale * (0.45 + 0.55 * swell);
+        for i in 0..3u8 {
+            let angle = pt.spin + f32::from(i) * 2.094_395 + age * 0.65;
+            let x = sx + angle.cos() * radius * 0.38;
+            let y = sy + angle.sin() * radius * 0.3;
+            let lobe = radius * (0.65 + f32::from(i) * 0.09);
+            draw_circle(
+                x,
+                y,
+                lobe,
+                Color::new(0.19, 0.18, 0.17, fade * (0.19 + (1.0 - heat) * 0.15)),
+            );
+            if heat > 0.0 {
+                draw_circle(
+                    x,
+                    y,
+                    lobe * 0.87,
+                    Color::new(1.0, 0.26 + heat * 0.32, 0.035, heat * 0.82),
+                );
+                draw_circle(
+                    x - lobe * 0.12,
+                    y + lobe * 0.15,
+                    lobe * 0.5,
+                    Color::new(
+                        1.0,
+                        0.69 + heat * 0.23,
+                        0.23 + heat * 0.4,
+                        heat * heat * 0.85,
+                    ),
+                );
+            }
+        }
+    }
+
+    fn draw_spark(
+        pt: &Particle,
+        to_screen: &dyn Fn(V2) -> (f32, f32),
+        scale: f32,
+        frac: f32,
+        (sx, sy): (f32, f32),
+    ) {
+        let tail = to_screen(pt.pos - pt.vel * 0.085);
+        draw_line(
+            sx,
+            sy,
+            tail.0,
+            tail.1,
+            (pt.size * scale * 3.0).max(2.0),
+            Color::new(1.0, 0.29, 0.035, frac * 0.22),
+        );
+        draw_line(
+            sx,
+            sy,
+            tail.0,
+            tail.1,
+            (pt.size * scale).max(1.0),
+            Color::new(1.0, 0.64 + 0.3 * frac, 0.22 + 0.5 * frac, frac),
+        );
+        draw_circle(
+            sx,
+            sy,
+            (pt.size * scale * 0.65).max(0.7),
+            Color::new(1.0, 0.97, 0.7, frac),
+        );
     }
 }

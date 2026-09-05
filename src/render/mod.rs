@@ -33,12 +33,14 @@ pub(crate) use hud::mute_button_rect;
 
 pub const WORLD_W: f32 = 200.0;
 pub const WORLD_H: f32 = 112.5;
+// Leave room below the battlefield for the charge HUD and foreground soil.
+const GROUND_MARGIN: f32 = 9.0;
 const PAGE_BG: Color = Color::from_hex(0x1A_14_23);
-pub(super) const SKY_TOP: Color = Color::from_hex(0x2B_1B_4D);
+pub(super) const SKY_TOP: Color = Color::from_hex(0x1D_30_4C);
 pub(super) const GRASS_LOW: Color = Color::from_hex(0x4C_7A_44);
 pub(super) const STONE: Color = Color::from_hex(0xA8_A2_9A);
 const IRON: Color = Color::from_hex(0x3A_3F_45);
-const CARRIAGE: Color = Color::from_hex(0x6B_45_26);
+const CARRIAGE: Color = Color::from_hex(0xA5_65_35);
 const WHEEL_C: Color = Color::from_hex(0x4E_34_21);
 const BALL_C: Color = Color::from_hex(0x2B_2B_30);
 
@@ -64,7 +66,10 @@ pub(super) fn origin() -> (f32, f32) {
 pub fn w2s(p: V2) -> Vec2 {
     let s = scale();
     let (ox, oy) = origin();
-    vec2(ox + p.x * s, screen_height() - oy - p.y * s)
+    vec2(
+        ox + p.x * s,
+        screen_height() - oy - (p.y + GROUND_MARGIN) * s,
+    )
 }
 
 /// Screen px → world (y-up, metres); inverse of `w2s` (for input).
@@ -74,7 +79,7 @@ pub fn screen_to_world(mx: f32, my: f32) -> V2 {
     let (ox, oy) = origin();
     V2 {
         x: (mx - ox) / s,
-        y: (screen_height() - my - oy) / s,
+        y: (screen_height() - my - oy) / s - GROUND_MARGIN,
     }
 }
 
@@ -108,8 +113,8 @@ pub fn draw(state: &GameState, muted: bool, font: Option<&macroquad::text::Font>
     draw_birds(state, shake);
     draw_ground(state, shake);
     draw_castle(state, shake);
-    actors::draw(state, shake);
     draw_cannons(state, shake);
+    actors::draw(state, shake);
     draw_markers(state, shake);
     draw_balls(state, shake);
     draw_aim(state, shake);
@@ -120,6 +125,11 @@ pub fn draw(state: &GameState, muted: bool, font: Option<&macroquad::text::Font>
         },
         s,
     );
+    // Restore the letterbox after world effects and camera shake spill outside it.
+    draw_rectangle(0.0, 0.0, screen_width(), oy, PAGE_BG);
+    draw_rectangle(0.0, screen_height() - oy, screen_width(), oy, PAGE_BG);
+    draw_rectangle(0.0, 0.0, ox, screen_height(), PAGE_BG);
+    draw_rectangle(screen_width() - ox, 0.0, ox, screen_height(), PAGE_BG);
     draw_vignette();
     draw_hurt(state);
     draw_ui(state, muted, font);
@@ -144,83 +154,17 @@ fn draw_cannons(state: &GameState, shake: Vec2) {
     draw_defender_cannon(state, &to_px, s);
 }
 
-/// Player cannon: grassy mound, carriage, spoked wheel, iron barrel.
+/// Heavy oak carriage and bronze-banded iron, with a readable recoil stroke.
 fn draw_player_cannon(state: &GameState, w: &dyn Fn(V2) -> Vec2, s: f32) {
-    let pp = world::player_pivot();
-    let base = w(V2 {
-        x: pp.x,
-        y: pp.y - 0.9,
-    });
-    draw_ellipse(
-        base.x,
-        base.y + 0.15 * s,
-        2.4 * s,
-        0.6 * s,
-        0.0,
-        darken(GRASS_LOW, 0.1),
-    );
-    let reload_tint = if state.player.reload > 0.0 {
-        mix(IRON, Color::new(0.9, 0.5, 0.45, 1.0), 0.45)
-    } else {
-        IRON
-    };
-    // Carriage bed + trail.
-    draw_rectangle(
-        base.x - 1.3 * s,
-        base.y - 0.75 * s,
-        2.4 * s,
-        0.45 * s,
-        CARRIAGE,
-    );
-    draw_rectangle(
-        base.x - 1.7 * s,
-        base.y - 0.45 * s,
-        1.2 * s,
-        0.3 * s,
-        darken(CARRIAGE, 0.2),
-    );
-    // Spoked wheel.
-    let wheel = vec2(base.x + 0.35 * s, base.y - 0.25 * s);
-    draw_circle(wheel.x, wheel.y, 0.68 * s, WHEEL_C);
-    draw_circle(wheel.x, wheel.y, 0.52 * s, darken(WHEEL_C, 0.25));
-    for k in 0..6u32 {
-        let ang = std::f32::consts::TAU * k as f32 / 6.0;
-        draw_line(
-            wheel.x,
-            wheel.y,
-            wheel.x + ang.cos() * 0.52 * s,
-            wheel.y + ang.sin() * 0.52 * s,
-            (0.09 * s).max(1.0),
-            WHEEL_C,
-        );
-    }
-    draw_circle(wheel.x, wheel.y, 0.16 * s, darken(WHEEL_C, 0.4));
-    // Hub bolt.
-    // Barrel, kicked back along its axis while `recoil` decays.
+    let pivot = world::player_pivot();
     let a = state.player.angle_deg.to_radians();
     let dir = V2 {
         x: a.cos(),
         y: a.sin(),
     };
-    let bp = pp - dir * (state.player.recoil * 0.38);
-    let pps = w(bp);
-    draw_rectangle_ex(
-        pps.x,
-        pps.y,
-        2.9 * s,
-        0.52 * s,
-        DrawRectangleParams {
-            offset: vec2(0.0, 0.5),
-            rotation: -a,
-            color: reload_tint,
-        },
-    );
-    barrel_cylinder(w, s, bp, dir, a);
-    // Muzzle band.
-    let muzzle = w(bp + dir * 2.75);
-    draw_circle(muzzle.x, muzzle.y, 0.3 * s, darken(IRON, 0.3));
-    // Touch-hole fire while the fuse burns: a swelling three-layer glow
-    // that ramps up as the shot nears.
+    cannon_carriage(w, s, pivot, 1.0, state.player.recoil);
+    let bp = pivot - dir * (state.player.recoil * 0.38);
+    barrel_cylinder(w, s, bp, dir, state.player.recoil);
     if state.player.fuse > 0.0 {
         fuse_glow(
             w,
@@ -230,48 +174,180 @@ fn draw_player_cannon(state: &GameState, w: &dyn Fn(V2) -> Vec2, s: f32) {
             state.t,
         );
     }
+    // A small iron shot pyramid at the gunner's feet.
+    for (dx, dy) in [(-4.8, 0.2), (-4.2, 0.2), (-4.5, 0.7)] {
+        let p = w(V2 {
+            x: pivot.x + dx,
+            y: world::ground_height(pivot.x + dx) + dy,
+        });
+        draw_circle(p.x, p.y, 0.28 * s, IRON);
+        draw_circle(
+            p.x - 0.07 * s,
+            p.y - 0.08 * s,
+            0.09 * s,
+            Color::from_hex(0xB5_B4_9E),
+        );
+    }
 }
 
-/// Sunlit top edge + shaded belly along a barrel: offset thin quads in
-/// barrel space fake a cylindrical highlight without textures. Split out
-/// so the cannon body stays under the line-count lint.
-fn barrel_cylinder(w: &dyn Fn(V2) -> Vec2, s: f32, bp: V2, dir: V2, a: f32) {
+/// Broad oak trail, metal fittings and iron-rimmed wheels, grounded at the pivot.
+fn cannon_carriage(w: &dyn Fn(V2) -> Vec2, s: f32, pivot: V2, facing: f32, recoil: f32) {
+    let floor = pivot.y - 0.9;
+    let base = w(V2 {
+        x: pivot.x - facing * 0.65,
+        y: floor,
+    });
+    draw_ellipse(
+        base.x,
+        base.y,
+        3.0 * s,
+        0.4 * s,
+        0.0,
+        Color::new(0.07, 0.10, 0.12, 0.32),
+    );
+    let rear = w(V2 {
+        x: pivot.x - facing * 2.8,
+        y: floor + 0.3,
+    });
+    let axle = w(V2 {
+        x: pivot.x + facing * 0.15 - facing * recoil * 0.12,
+        y: floor + 0.95,
+    });
+    draw_line(
+        rear.x,
+        rear.y,
+        axle.x,
+        axle.y,
+        0.65 * s,
+        darken(CARRIAGE, 0.4),
+    );
+    draw_line(
+        rear.x,
+        rear.y - 0.16 * s,
+        axle.x,
+        axle.y - 0.16 * s,
+        0.18 * s,
+        CARRIAGE,
+    );
+    draw_rectangle(
+        axle.x - 1.6 * s,
+        axle.y - 0.22 * s,
+        2.7 * s,
+        0.48 * s,
+        CARRIAGE,
+    );
+    for dx in [-1.3, 0.7] {
+        draw_rectangle(axle.x + dx * s, axle.y - 0.25 * s, 0.18 * s, 0.54 * s, IRON);
+        draw_circle(
+            axle.x + (dx + 0.09) * s,
+            axle.y,
+            0.07 * s,
+            Color::from_hex(0xDF_C1_7F),
+        );
+    }
+    let radius = 1.02 * s;
+    draw_circle(axle.x, axle.y, radius, Color::from_hex(0x25_2D_31));
+    draw_circle(axle.x, axle.y, radius * 0.86, CARRIAGE);
+    draw_circle(axle.x, axle.y, radius * 0.66, WHEEL_C);
+    for k in 0..10u16 {
+        let a = f32::from(k) * std::f32::consts::TAU / 10.0 + recoil * 0.2;
+        let rim = vec2(
+            axle.x + a.cos() * radius * 0.78,
+            axle.y + a.sin() * radius * 0.78,
+        );
+        draw_line(axle.x, axle.y, rim.x, rim.y, (0.12 * s).max(1.0), CARRIAGE);
+        draw_circle(rim.x, rim.y, 0.045 * s, Color::from_hex(0xDF_C1_7F));
+    }
+    draw_circle(axle.x, axle.y, radius * 0.3, IRON);
+    draw_circle(
+        axle.x - 0.04 * s,
+        axle.y - 0.06 * s,
+        radius * 0.16,
+        Color::from_hex(0xD8_B2_6B),
+    );
+}
+
+/// Layered metal shading; the lip uses the same muzzle offset as ballistics.
+fn barrel_cylinder(w: &dyn Fn(V2) -> Vec2, s: f32, bp: V2, dir: V2, heat: f32) {
     let perp = V2 {
         x: -dir.y,
         y: dir.x,
     };
-    let hi0 = w(bp + perp * 0.16);
-    draw_rectangle_ex(
-        hi0.x,
-        hi0.y,
-        2.7 * s,
-        0.10 * s,
-        DrawRectangleParams {
-            offset: vec2(0.0, 0.5),
-            rotation: -a,
-            color: Color::new(1.0, 0.88, 0.66, 0.35),
-        },
+    let rotation = -dir.y.atan2(dir.x);
+    let breech = bp - dir * 0.55;
+    let start = w(breech);
+    let length = physics::BARREL_LEN + 0.55;
+    let bronze = Color::from_hex(0xCE_A4_5B);
+    for (offset, thick, color) in [
+        (0.0, 1.14, Color::from_hex(0x20_28_2F)),
+        (
+            0.04,
+            0.88,
+            mix(IRON, Color::from_hex(0x9F_5D_3A), heat * 0.35),
+        ),
+        (0.24, 0.25, Color::from_hex(0x86_98_98)),
+        (0.36, 0.08, Color::from_hex(0xD6_D9_BF)),
+        (-0.31, 0.18, Color::from_hex(0x25_31_39)),
+    ] {
+        let p = w(breech + perp * offset);
+        draw_rectangle_ex(
+            p.x,
+            p.y,
+            length * s,
+            thick * s,
+            DrawRectangleParams {
+                offset: vec2(0.0, 0.5),
+                rotation,
+                color,
+            },
+        );
+    }
+    for along in [0.25, 1.4, length - 0.25] {
+        let p = w(breech + dir * along);
+        draw_rectangle_ex(
+            p.x,
+            p.y,
+            0.22 * s,
+            1.22 * s,
+            DrawRectangleParams {
+                offset: vec2(0.0, 0.5),
+                rotation,
+                color: darken(bronze, 0.35),
+            },
+        );
+        let p = w(breech + dir * along + perp * 0.3);
+        draw_rectangle_ex(
+            p.x,
+            p.y,
+            0.22 * s,
+            0.25 * s,
+            DrawRectangleParams {
+                offset: vec2(0.0, 0.5),
+                rotation,
+                color: bronze,
+            },
+        );
+    }
+    draw_circle(start.x, start.y, 0.54 * s, darken(IRON, 0.15));
+    draw_circle(start.x - 0.08 * s, start.y - 0.14 * s, 0.24 * s, bronze);
+    let muzzle = w(bp + dir * physics::BARREL_LEN);
+    let axis = vec2(dir.x, -dir.y);
+    let side = vec2(-axis.y, axis.x);
+    draw_line(
+        muzzle.x - side.x * 0.58 * s,
+        muzzle.y - side.y * 0.58 * s,
+        muzzle.x + side.x * 0.58 * s,
+        muzzle.y + side.y * 0.58 * s,
+        0.28 * s,
+        bronze,
     );
-    let lo0 = w(bp - perp * 0.22);
-    draw_rectangle_ex(
-        lo0.x,
-        lo0.y,
-        2.7 * s,
-        0.10 * s,
-        DrawRectangleParams {
-            offset: vec2(0.0, 0.5),
-            rotation: -a,
-            color: Color::new(0.0, 0.0, 0.0, 0.30),
-        },
-    );
-    // Breech knob.
-    let breech = w(bp - dir * 0.25);
-    draw_circle(breech.x, breech.y, 0.30 * s, darken(IRON, 0.25));
-    draw_circle(
-        breech.x - 0.06 * s,
-        breech.y - 0.07 * s,
-        0.12 * s,
-        Color::new(1.0, 0.9, 0.7, 0.5),
+    draw_line(
+        muzzle.x - side.x * 0.36 * s,
+        muzzle.y - side.y * 0.36 * s,
+        muzzle.x + side.x * 0.36 * s,
+        muzzle.y + side.y * 0.36 * s,
+        0.15 * s,
+        Color::from_hex(0x12_1D_27),
     );
 }
 
@@ -300,45 +376,24 @@ fn fuse_glow(w: &dyn Fn(V2) -> Vec2, s: f32, at: V2, burn: f32, now: f32) {
     );
 }
 
-/// Defender cannon on the keep roof with its crew silhouettes.
+/// Matching siege gun on the keep's fighting platform.
 fn draw_defender_cannon(state: &GameState, w: &dyn Fn(V2) -> Vec2, s: f32) {
-    let dp = w(world::defender_pivot());
-    let keep_top = w(V2 {
-        x: world::DEFENDER_PIVOT_X,
-        y: world::KEEP_TOP,
-    });
-    let dcol = if state.defender.reload_anim > 0.0 {
-        mix(IRON, Color::new(0.9, 0.5, 0.45, 1.0), 0.45)
-    } else {
-        IRON
-    };
-    draw_rectangle(
-        dp.x - 0.9 * s,
-        keep_top.y - 0.55 * s,
-        1.8 * s,
-        0.5 * s,
-        CARRIAGE,
-    );
-    // Barrel, kicked back along its muzzle axis while `recoil` decays.
+    if !state
+        .segments
+        .iter()
+        .any(|seg| seg.kind == world::SegmentKind::Keep && seg.alive())
+    {
+        return;
+    }
+    let pivot = world::defender_pivot();
     let a = state.defender.display_angle.to_radians();
-    let mdir = V2 {
+    let dir = V2 {
         x: -a.cos(),
         y: a.sin(),
     };
-    let bp = world::defender_pivot() - mdir * (state.defender.recoil * 0.3);
-    let bps = w(bp);
-    draw_rectangle_ex(
-        bps.x,
-        bps.y,
-        2.2 * s,
-        0.4 * s,
-        DrawRectangleParams {
-            offset: vec2(0.0, 0.5),
-            rotation: std::f32::consts::PI + a,
-            color: dcol,
-        },
-    );
-    // Touch-hole fire while the fuse burns (the keep-side telegraph).
+    cannon_carriage(w, s, pivot, -1.0, state.defender.recoil);
+    let bp = pivot - dir * (state.defender.recoil * 0.3);
+    barrel_cylinder(w, s, bp, dir, state.defender.recoil);
     if state.defender.fuse > 0.0 {
         fuse_glow(
             w,
@@ -346,31 +401,6 @@ fn draw_defender_cannon(state: &GameState, w: &dyn Fn(V2) -> Vec2, s: f32) {
             bp + V2 { x: 0.0, y: 0.35 },
             state.defender.fuse_progress(),
             state.t,
-        );
-    }
-    // Crew silhouettes, bobbing while they reload.
-    let bob = if state.defender.reload_anim > 0.0 {
-        (state.t * 10.0).sin() * 0.05
-    } else {
-        0.0
-    };
-    for (dx, hh) in [(1.5_f32, 0.75_f32), (2.3, 0.65)] {
-        let cp = w(V2 {
-            x: world::DEFENDER_PIVOT_X + dx,
-            y: world::KEEP_TOP + hh + bob,
-        });
-        draw_circle(
-            cp.x,
-            cp.y - 0.32 * s,
-            0.17 * s,
-            Color::new(0.12, 0.1, 0.12, 0.9),
-        );
-        draw_rectangle(
-            cp.x - 0.13 * s,
-            cp.y - 0.2 * s,
-            0.26 * s,
-            hh * 0.55 * s,
-            Color::new(0.12, 0.1, 0.12, 0.9),
         );
     }
 }
@@ -396,14 +426,40 @@ fn draw_balls(state: &GameState, shake: Vec2) {
                 Color::new(0.1, 0.08, 0.06, sa),
             );
         }
+        let trail_color = if b.side == physics::Side::Player {
+            Color::new(1.0, 0.75, 0.35, 1.0)
+        } else {
+            Color::new(1.0, 0.39, 0.19, 1.0)
+        };
+        let mut previous = None;
         for (i, tp) in b.trail.iter().enumerate() {
             let f = (i + 1) as f32 / b.trail.len().max(1) as f32;
             let v = w2s(*tp) + shake;
+            if let Some(from) = previous {
+                let from: Vec2 = from;
+                draw_line(
+                    from.x,
+                    from.y,
+                    v.x,
+                    v.y,
+                    (0.45 * s * f).max(1.0),
+                    Color::new(trail_color.r, trail_color.g, trail_color.b, 0.38 * f * f),
+                );
+                draw_line(
+                    from.x,
+                    from.y,
+                    v.x,
+                    v.y,
+                    (0.12 * s * f).max(0.8),
+                    Color::new(1.0, 0.91, 0.67, 0.65 * f * f),
+                );
+            }
+            previous = Some(v);
             draw_circle(
                 v.x,
                 v.y,
-                (BALL_R * s * 0.6).max(1.8),
-                Color::new(0.16, 0.15, 0.18, 0.4 * f),
+                (BALL_R * s * (1.0 - f) * 1.8).max(1.0),
+                Color::new(0.26, 0.29, 0.32, 0.12 * f),
             );
         }
         let v = w2s(b.pos) + shake;

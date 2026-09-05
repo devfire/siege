@@ -356,21 +356,41 @@ fn draw_gate_torches(
 
 fn draw_keep_roof(state: &GameState, x0: f32, width: f32, top: f32, w: &dyn Fn(V2) -> Vec2) {
     let s = scale();
-    let cx = x0 + width * 0.5;
+    // A narrow rear watch-turret leaves the foreground gun deck open.
+    let cx = x0 + width * 0.8;
     let apex = w(V2 {
         x: cx,
         y: top + 6.5,
     });
     let left = w(V2 {
-        x: x0 - 0.7,
+        x: cx - width * 0.23,
         y: top,
     });
     let right = w(V2 {
-        x: x0 + width + 0.7,
+        x: cx + width * 0.23,
         y: top,
     });
     draw_triangle(left, apex, right, ROOF_C);
     draw_triangle(left, apex, w(V2 { x: cx, y: top }), darken(ROOF_C, 0.18));
+    let deck = w(V2 {
+        x: x0 - 0.4,
+        y: top + 0.08,
+    });
+    draw_rectangle(
+        deck.x,
+        deck.y,
+        (width + 0.8) * s,
+        0.38 * s,
+        darken(STONE, 0.2),
+    );
+    draw_line(
+        deck.x,
+        deck.y,
+        deck.x + (width + 0.8) * s,
+        deck.y,
+        (0.12 * s).max(1.0),
+        Color::from_hex(0xD8_C5_A2),
+    );
     // Banner pole + waving flag.
     let pole_top = w(V2 {
         x: cx,
@@ -408,7 +428,6 @@ fn draw_keep_roof(state: &GameState, x0: f32, width: f32, top: f32, w: &dyn Fn(V
         draw_triangle(a0, a1, b1, shade);
         draw_triangle(a0, b1, b0, shade);
     }
-    let _ = s;
 }
 
 fn draw_crack(

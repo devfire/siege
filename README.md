@@ -31,6 +31,15 @@ cargo test
 
 ---
 
+## Battlefield Presentation
+
+- Heavy bronze-banded cannons, iron-rimmed wheels, recoil, and directional muzzle flames.
+- Impacts bloom into fireballs, expanding shockwaves, glowing sparks, tumbling masonry, and drifting smoke.
+- Helmeted gun crews and wall guards cover their heads for nearby or approaching cannonballs, then relax as the shot passes. Distant overhead shots do not alarm them.
+- A softer dawn palette, smooth sun bloom, open keep firing deck, and raised battlefield keep the action clear of the HUD.
+
+These effects are cosmetic: cannon pivots, muzzle spawn points, damage, and ballistic equations are unchanged. Animations follow simulation time, including pause and end-of-round slow motion.
+
 ## Game Architecture
 
 The simulation runs on a deterministic, macroquad-independent physics foundation:
