@@ -19,8 +19,8 @@ const AOE_R: f32 = 3.2;
 /// the wall beneath holds.
 const GIB_R: f32 = 2.6;
 const SEG_DMG: f32 = 10.0;
-const CANNON_DMG: f32 = 60.0;
-const RELOAD: f32 = 1.0;
+const CANNON_DMG: f32 = 40.0;
+const RELOAD: f32 = 0.3;
 /// Fuse burn (s) between trigger and shot — the player's is snappy, the
 /// defender's a readable telegraph. Puffs + hiss while it burns.
 const PRIME_PLAYER: f32 = 0.32;
